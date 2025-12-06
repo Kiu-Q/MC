@@ -926,7 +926,7 @@ const App = () => {
                      {Array.from({ length: 60 }, (_, i) => i + 1).map(qNum => (
                          <div key={qNum} className="flex items-center gap-1">
                              <span className="text-xs text-slate-500 font-mono w-6">Q{qNum}</span>
-                             <input type="number" min="0" step="1" className="w-full p-1 text-xs border border-slate-300 rounded text-center outline-none" value={questionMarks[qNum] !== undefined ? questionMarks[qNum] : ""} placeholder="1" onChange={(e) => { const val = e.target.value; setQuestionMarks(prev => ({ ...prev, [qNum]: val })); }} />
+                             <input type="number" min="0" step="1" className="w-full p-1 text-xs border border-slate-300 rounded text-center outline-none bg-slate-50" value={questionMarks[qNum] !== undefined ? questionMarks[qNum] : ""} placeholder="1" onChange={(e) => { const val = e.target.value; setQuestionMarks(prev => ({ ...prev, [qNum]: val })); }} />
                          </div>
                      ))}
                  </div>
