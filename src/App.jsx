@@ -135,7 +135,7 @@ const App = () => {
     const searchWidth = Math.floor(width * 0.8); 
     
     try {
-        const pixels = ctx.getImageData(searchStartX, searchStartY, searchWidth, searchEndY - searchStartY, { willReadFrequently: true });
+        const pixels = ctx.getImageData(searchStartX, searchStartY, searchWidth, searchEndY - searchStartY);
         const data = pixels.data;
         const searchH = searchEndY - searchStartY;
         let maxDarkness = 0;
@@ -171,7 +171,7 @@ const App = () => {
     const searchHeight = Math.floor(height * 0.9); // Search small band in header
     
     try {
-        const pixels = ctx.getImageData(searchStartX, searchStartY, searchEndX - searchStartX, searchHeight, { willReadFrequently: true });
+        const pixels = ctx.getImageData(searchStartX, searchStartY, searchEndX - searchStartX, searchHeight);
         const data = pixels.data;
         const searchW = searchEndX - searchStartX;
         let maxDarkness = 0;
@@ -617,7 +617,7 @@ const App = () => {
                 const ctx = canvas.getContext('2d');
                 ctx.drawImage(img, 0, 0);
                 
-                const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height, { willReadFrequently: true });
+                const pixels = ctx.getImageData(0, 0, canvas.width, canvas.height);
                 const grayData = new Uint8Array(canvas.width * canvas.height);
                 
                 for (let i = 0; i < pixels.data.length; i += 4) {
