@@ -911,7 +911,7 @@ const App = () => {
                 <GraduationCap className="w-4 h-4"/>
                 Answer Key
             </label>
-            <textarea placeholder="Paste answers (e.g. '1. A 2. B', 'ABCDA')" className="w-full h-24 p-2 text-sm border border-slate-300 rounded bg-slate-50 focus:bg-white transition-colors outline-none font-mono" value={answerKeyInput} onChange={(e) => setAnswerKeyInput(e.target.value)} />
+            <textarea placeholder="Paste answers (e.g. '1.A 2.B', 'ABCDA')" className="w-full h-24 p-2 text-sm border border-slate-300 rounded bg-slate-50 focus:bg-white transition-colors outline-none font-mono" value={answerKeyInput} onChange={(e) => setAnswerKeyInput(e.target.value)} />
             <div className="text-xs text-slate-400">Found {Object.keys(parsedAnswerKey).length} answers.</div>
           </div>
 
@@ -937,7 +937,7 @@ const App = () => {
           <div className="p-4 bg-blue-50 text-blue-800 text-sm rounded-lg border border-blue-100">
              <h3 className="font-bold mb-2 flex items-center gap-2"><ScanLine className="w-4 h-4"/> Auto-Align Active</h3>
              <p className="text-xs mb-2">Drag the <strong>red boxes</strong> to align</p>
-             <button onClick={resetTemplate} className="mt-3 text-xs text-blue-600 underline hover:text-blue-800">Realignment</button>
+             <button onClick={resetTemplate} className="mt-3 text-xs text-blue-600 underline hover:text-blue-800">Realign Boxes</button>
           </div>
 
           {/* Region List */}
