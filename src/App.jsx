@@ -763,8 +763,6 @@ const App = () => {
     // SHEET 2: SCORES (Per Student)
     const scoresData = pages.map((page, index) => {
         let correct = 0;
-        let incorrect = 0;
-        let blank = 0;
         let total = 0;
 
         const pageRegions = page.regions || [];
@@ -776,11 +774,8 @@ const App = () => {
                     if (correctAns) {
                         if (row.label === correctAns) {
                             correct++;
-                        } else {
-                            incorrect++;
                         }
                     }
-                    if (row.label === 'BLANK') blank++;
                 });
             }
         });
@@ -806,6 +801,17 @@ const App = () => {
   return (
     <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden">
       
+      {/* ADD STYLE TAG HERE */}
+      <style>{`
+        :root, body, #root {
+            height: 100%;
+            width: 100%;
+            margin: 0;
+            padding: 0;
+            max-width: none !important;
+        }
+      `}</style>
+
       {/* LEFT SIDEBAR - CONTROLS */}
       <div className="w-80 bg-white border-r border-slate-200 flex flex-col shadow-xl z-10">
         <div className="p-4 border-b border-slate-200 bg-slate-900 text-white">
@@ -848,7 +854,7 @@ const App = () => {
             </label>
             <textarea
                 placeholder="Paste answers here (e.g. '1. A 2. B' or 'ABCDE...')"
-                className="w-full h-24 p-2 text-sm border border-slate-300 rounded focus:ring-2 focus:ring-blue-500 outline-none font-mono"
+                className="w-full h-24 p-2 text-sm border border-slate-300 rounded bg-slate-50 focus:bg-white transition-colors focus:ring-2 focus:ring-blue-500 outline-none font-mono"
                 value={answerKeyInput}
                 onChange={(e) => setAnswerKeyInput(e.target.value)}
             />
