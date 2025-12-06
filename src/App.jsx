@@ -882,7 +882,7 @@ const App = () => {
 
     const wsScores = window.XLSX.utils.json_to_sheet(scoresData);
     window.XLSX.utils.book_append_sheet(wb, wsScores, "Scores");
-    window.XLSX.writeFile(wb, "omr_graded_results.xlsx");
+    window.XLSX.writeFile(wb, `${file ? file.name.replace(/\.[^/.]+$/, "") : "results"}_results.xlsx`);
   };
 
   // --- UI Components ---
