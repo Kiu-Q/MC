@@ -129,10 +129,10 @@ const App = () => {
   // --- Helper: Line Detection ---
   const detectVerticalOffset = (ctx, width, height) => {
     const EXPECTED_Y_RATIO = 0.227; 
-    const searchStartY = Math.floor(height * 0.3);
-    const searchEndY = Math.floor(height * 0.5);
-    const searchStartX = Math.floor(width * 0.2);
-    const searchWidth = Math.floor(width * 0.8); 
+    const searchStartY = Math.floor(height * 0.18);
+    const searchEndY = Math.floor(height * 0.28);
+    const searchStartX = Math.floor(width * 0.30);
+    const searchWidth = Math.floor(width * 0.40); 
     
     try {
         const pixels = ctx.getImageData(searchStartX, searchStartY, searchWidth, searchEndY - searchStartY);
@@ -146,7 +146,7 @@ const App = () => {
             for (let x = 0; x < searchWidth; x++) {
                 const idx = (y * searchWidth + x) * 4;
                 const val = (data[idx] + data[idx+1] + data[idx+2]) / 3;
-                if (val < 200) darkPixels++;
+                if (val < 150) darkPixels++;
             }
             if (darkPixels > searchWidth * 0.5) {
                  if (darkPixels > maxDarkness) {
@@ -164,11 +164,11 @@ const App = () => {
   };
 
   const detectHorizontalOffset = (ctx, width, height) => {
-    const EXPECTED_X_RATIO = 0.355; 
-    const searchStartX = Math.floor(width * 0.2);
-    const searchEndX = Math.floor(width * 0.5);
-    const searchStartY = Math.floor(height * 0.5);
-    const searchHeight = Math.floor(height * 0.9); // Search small band in header
+    const EXPECTED_X_RATIO = 0.817; 
+    const searchStartX = Math.floor(width * 0.75);
+    const searchEndX = Math.floor(width * 0.90);
+    const searchStartY = Math.floor(height * 0.20);
+    const searchHeight = Math.floor(height * 0.10); 
     
     try {
         const pixels = ctx.getImageData(searchStartX, searchStartY, searchEndX - searchStartX, searchHeight);
@@ -182,7 +182,7 @@ const App = () => {
             for (let y = 0; y < searchHeight; y++) {
                 const idx = (y * searchW + x) * 4;
                 const val = (data[idx] + data[idx+1] + data[idx+2]) / 3;
-                if (val < 200) darkPixels++;
+                if (val < 150) darkPixels++;
             }
             if (darkPixels > searchHeight * 0.5) {
                  if (darkPixels > maxDarkness) { maxDarkness = darkPixels; bestX = x; }
@@ -210,7 +210,7 @@ const App = () => {
 
     // --- ID Blocks (New) ---
     const ID_Y = (imgH * 0.066) + yOffset;
-    const ID_H = imgH * 0.135; 
+    const ID_H = imgH * 0.11; 
     const ID_W_SMALL = imgW * 0.015; 
     
     const ID_X_LEVEL = (imgW * 0.435) + xOffset;
@@ -694,7 +694,7 @@ const App = () => {
                                     for (let px = cx + paddingX; px < cx + cw - paddingX; px++) {
                                         if (px < canvas.width && py < canvas.height) {
                                             const val = grayData[Math.floor(py) * canvas.width + Math.floor(px)];
-                                            if (val < 210) darkPixelCount++;
+                                            if (val < 200) darkPixelCount++;
                                             totalPixelCount++;
                                         }
                                     }
@@ -714,7 +714,7 @@ const App = () => {
                             if ((maxFill - minFill) < 0.1 || maxFill < 0.55) {
                                 label = 'BLANK';
                             }
-                            else if ((maxFill - secondMaxFill) < 0.1) {
+                            else if ((maxFill - secondMaxFill) < 0.05) {
                                 label = 'MULT';
                             }
                             else {
@@ -895,7 +895,7 @@ const App = () => {
         <div className="p-4 border-b border-slate-200 bg-slate-900 text-white">
           <h1 className="text-xl font-bold flex items-center gap-2">
             <ScanSearch className="w-6 h-6 text-blue-400" />
-            MC Auto Grader
+            Auto Grader
           </h1>
           <p className="text-xs text-slate-400 mt-1">Specialized for Ho Fung College</p>
         </div>
@@ -920,7 +920,7 @@ const App = () => {
                 <GraduationCap className="w-4 h-4"/>
                 Answer Key
             </label>
-            <textarea placeholder="Paste answers (e.g. '1.A 2.B', 'ABCDA')" className="w-full h-24 p-2 text-sm border border-slate-300 rounded bg-slate-50 focus:bg-white transition-colors outline-none font-mono" value={answerKeyInput} onChange={(e) => setAnswerKeyInput(e.target.value)} />
+            <textarea placeholder="Paste answers (e.g. '1. A')" className="w-full h-24 p-2 text-sm border border-slate-300 rounded bg-slate-50 focus:bg-white transition-colors outline-none font-mono" value={answerKeyInput} onChange={(e) => setAnswerKeyInput(e.target.value)} />
             <div className="text-xs text-slate-400">Found {Object.keys(parsedAnswerKey).length} answers.</div>
           </div>
 
@@ -935,7 +935,7 @@ const App = () => {
                      {Array.from({ length: 60 }, (_, i) => i + 1).map(qNum => (
                          <div key={qNum} className="flex items-center gap-1">
                              <span className="text-xs text-slate-500 font-mono w-6">Q{qNum}</span>
-                             <input type="number" min="0" step="1" className="w-full p-1 text-xs border border-slate-300 rounded text-center outline-none bg-slate-50" value={questionMarks[qNum] !== undefined ? questionMarks[qNum] : ""} placeholder="1" onChange={(e) => { const val = e.target.value; setQuestionMarks(prev => ({ ...prev, [qNum]: val })); }} />
+                             <input type="number" min="0" step="1" className="w-full p-1 text-xs border border-slate-300 rounded text-center outline-none" value={questionMarks[qNum] !== undefined ? questionMarks[qNum] : ""} placeholder="1" onChange={(e) => { const val = e.target.value; setQuestionMarks(prev => ({ ...prev, [qNum]: val })); }} />
                          </div>
                      ))}
                  </div>
@@ -945,8 +945,8 @@ const App = () => {
           {/* Instructions */}
           <div className="p-4 bg-blue-50 text-blue-800 text-sm rounded-lg border border-blue-100">
              <h3 className="font-bold mb-2 flex items-center gap-2"><ScanLine className="w-4 h-4"/> Auto-Align Active</h3>
-             <p className="text-xs mb-2">Drag the <strong>red boxes</strong> to align</p>
-             <button onClick={resetTemplate} className="mt-3 text-xs text-blue-600 underline hover:text-blue-800">Realign Boxes</button>
+             <p className="text-xs mb-2">Drag the <strong>top red boxes</strong> to align Class/No.</p>
+             <button onClick={resetTemplate} className="mt-3 text-xs text-blue-600 underline hover:text-blue-800">Recalculate Alignment</button>
           </div>
 
           {/* Region List */}
