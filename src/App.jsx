@@ -135,7 +135,7 @@ const App = () => {
     const searchWidth = Math.floor(width * 0.8); 
     
     try {
-        const pixels = ctx.getImageData(searchStartX, searchStartY, searchWidth, searchEndY - searchStartY);
+        const pixels = ctx.getImageData(searchStartX, searchStartY, searchWidth, searchEndY - searchStartY, { willReadFrequently: true });
         const data = pixels.data;
         const searchH = searchEndY - searchStartY;
         let maxDarkness = 0;
