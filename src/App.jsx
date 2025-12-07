@@ -585,7 +585,7 @@ const App = () => {
                         rowScores.sort((a, b) => b.fillRatio - a.fillRatio);
                         
                         // NEW LOGIC: Candidate System for ID
-                        const MIN_ID_THRESHOLD = 0.4; // Lowered to 5% to catch very light marks
+                        const MIN_ID_THRESHOLD = 0.45; // Lowered to 5% to catch very light marks
                         const candidates = rowScores.filter(s => s.fillRatio >= MIN_ID_THRESHOLD);
 
                         let label = 'BLANK';
@@ -732,10 +732,10 @@ const App = () => {
     const footerRows = [
         [], [], 
         ["Marks"], 
-        ["Average"],
-        ["% Correct"],
-        ["Key"],
-        ["% A"], ["% B"], ["% C"], ["% D"]
+        ["Total mark"],
+        ["Percentage"],
+        ["Answer"],
+        ["A"], ["B"], ["C"], ["D"]
     ];
 
     const IDX_MARKS = 2;
@@ -816,7 +816,7 @@ const App = () => {
 
     window.XLSX.utils.book_append_sheet(wb, wsScores, "Scores");
     
-    window.XLSX.writeFile(wb, "omr_graded_results.xlsx");
+    window.XLSX.writeFile(wb, `${file ? file.name.replace(/\.[^/.]+$/, "") : "results"}_results.xlsx`);    
     setToast("Results exported successfully!");
     setTimeout(() => setToast(null), 3000);
   };
@@ -878,7 +878,7 @@ const App = () => {
                  <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 space-y-2">
                      {weightSections.map((section, idx) => (
                          <div key={section.id} className="flex items-center gap-1 text-xs">
-                             <input type="number" min="1" className="w-12 p-1 border rounded text-center" value={section.start} onChange={(e) => {
+                             <input type="number" min="1" className="w-12 p-1 border rounded text-center bg-white" value={section.start} onChange={(e) => {
                                  const valStr = e.target.value;
                                  if (valStr === '') {
                                      const newSecs = [...weightSections];
@@ -893,7 +893,7 @@ const App = () => {
                                  setWeightSections(newSecs);
                              }} placeholder="Start" />
                              <span>-</span>
-                             <input type="number" min="1" className="w-12 p-1 border rounded text-center" value={section.end} 
+                             <input type="number" min="1" className="w-12 p-1 border rounded text-center bg-white" value={section.end} 
                              onChange={(e) => {
                                  const valStr = e.target.value;
                                  if (valStr === '') {
