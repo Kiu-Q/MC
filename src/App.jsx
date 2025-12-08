@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Upload, FileSpreadsheet, Plus, Trash2, CheckCircle2, ScanSearch, Settings, ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut, LayoutTemplate, ChevronLeft, Layers, ScanLine, GraduationCap, Hash, UserSquare2, X, Loader2, RotateCw } from 'lucide-react';
+import { Upload, FileSpreadsheet, Plus, Trash2, CheckCircle2, ScanSearch, Settings, ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut, LayoutTemplate, ChevronLeft, Layers, ScanLine, GraduationCap, Hash, UserSquare2, X, Loader2, RotateCw, Menu, HelpCircle } from 'lucide-react';
 
 const App = () => {
     // State for multiple pages
@@ -978,12 +978,23 @@ const App = () => {
 
             {/* LEFT SIDEBAR */}
             <div className="w-80 bg-[#010409] border-r border-[#30363d] flex flex-col shadow-xl z-10">
-                <div className="p-4 border-b border-[#30363d] bg-[#0d1117] text-[#e6edf3]">
-                    <h1 className="text-xl font-bold flex items-center gap-2">
-                        <ScanSearch className="w-6 h-6 text-[#58a6ff]" />
-                        MC Auto Grader
-                    </h1>
-                    <p className="text-xs text-[#7d8590] mt-1">Specialized for Ho Fung College</p>
+                <div className="p-4 border-b border-[#30363d] bg-[#0d1117] text-[#e6edf3] flex justify-between items-start">
+                    <div>
+                        <h1 className="text-xl font-bold flex items-center gap-2">
+                            <ScanSearch className="w-6 h-6 text-[#58a6ff]" />
+                            MC Auto Grader
+                        </h1>
+                        <p className="text-xs text-[#7d8590] mt-1">Specialized for Ho Fung College</p>
+                    </div>
+                    <a 
+                        href="https://github.com/Kiu-Q/MC" // Placeholder
+                        target="_blank" 
+                        rel="noopener noreferrer"
+                        className="text-slate-500 hover:text-blue-400 transition-colors"
+                        title="Documentation"
+                    >
+                        <HelpCircle className="w-5 h-5" />
+                    </a>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4 space-y-6">
