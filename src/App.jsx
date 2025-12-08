@@ -20,6 +20,7 @@ const App = () => {
   
   // Marks State (Batch Sections)
   const [isMarksSettingsOpen, setIsMarksSettingsOpen] = useState(false);
+  const [isTemplateSettingsOpen, setIsTemplateSettingsOpen] = useState(false); // New state for dropdown
   const [weightSections, setWeightSections] = useState([
       { id: 1, start: 1, end: 60, mark: 1 }
   ]);
@@ -636,7 +637,7 @@ const App = () => {
                                     for (let px = cx + paddingX; px < cx + cw - paddingX; px++) {
                                         if (px < canvas.width && py < canvas.height) {
                                             const val = grayData[Math.floor(py) * canvas.width + Math.floor(px)];
-                                            if (val < 200) darkPixelCount++; 
+                                            if (val < 220) darkPixelCount++; 
                                             totalPixelCount++;
                                         }
                                     }
@@ -652,10 +653,10 @@ const App = () => {
                             let selectedIndex = -1;
                             
                             // Original Robust Answer Logic
-                            if ((maxFill - minFill) < 0.1 || maxFill < 0.55) { 
+                            if ((maxFill - minFill) < 0.1 || maxFill < 0.5) { 
                                 label = 'BLANK';
                             }
-                            else if ((maxFill - secondMaxFill) < 0.05) {
+                            else if ((maxFill - secondMaxFill) < 0.13) {
                                 label = 'MULT';
                             }
                             else { 
@@ -724,6 +725,12 @@ const App = () => {
     const wb = window.XLSX.utils.book_new();
     const wsResults = window.XLSX.utils.json_to_sheet(resultsData);
 
+    // Apply AutoFilter to the Student Data range (Headers + Student Rows)
+    // This runs before adding the footer, so the range '!ref' covers exactly what we want to filter.
+    if (resultsData.length > 0 && wsResults['!ref']) {
+        wsResults['!autofilter'] = { ref: wsResults['!ref'] };
+    }
+
     // 2. Footer Stats (using Excel formulas)
     const studentCount = resultsData.length;
     const startRow = 2; 
@@ -770,10 +777,10 @@ const App = () => {
         
         footerRows[IDX_PCT].push({ t: 'n', f: ratioFormula, z: '0.0%' });
 
-        footerRows[IDX_A].push({ t: 'n', f: `COUNTIF(${range},"A")/${studentCount}`, z: '0%' });
-        footerRows[IDX_B].push({ t: 'n', f: `COUNTIF(${range},"B")/${studentCount}`, z: '0%' });
-        footerRows[IDX_C].push({ t: 'n', f: `COUNTIF(${range},"C")/${studentCount}`, z: '0%' });
-        footerRows[IDX_D].push({ t: 'n', f: `COUNTIF(${range},"D")/${studentCount}`, z: '0%' });
+        footerRows[IDX_A].push({ t: 'n', f: `COUNTIF(${range},"A")/${studentCount}`, z: '0.0%' });
+        footerRows[IDX_B].push({ t: 'n', f: `COUNTIF(${range},"B")/${studentCount}`, z: '0.0%' });
+        footerRows[IDX_C].push({ t: 'n', f: `COUNTIF(${range},"C")/${studentCount}`, z: '0.0%' });
+        footerRows[IDX_D].push({ t: 'n', f: `COUNTIF(${range},"D")/${studentCount}`, z: '0.0%' });
     }
 
     window.XLSX.utils.sheet_add_aoa(wsResults, footerRows, { origin: -1 });
@@ -821,6 +828,88 @@ const App = () => {
     setTimeout(() => setToast(null), 3000);
   };
 
+  // --- Marks Settings Component ---
+  const renderWeightSettings = () => (
+      <div className="space-y-2">
+         <button onClick={() => setIsMarksSettingsOpen(!isMarksSettingsOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-slate-500 tracking-wider hover:text-slate-700">
+            <div className="flex items-center gap-2"><Hash className="w-4 h-4"/> Question Weighting</div>
+            {isMarksSettingsOpen ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
+         </button>
+         {isMarksSettingsOpen && (
+             <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 space-y-2">
+                 {weightSections.map((section, idx) => (
+                     <div key={section.id} className="flex items-center gap-1 text-xs">
+                         <input type="number" min="1" className="w-12 p-1 border rounded text-center" value={section.start} onChange={(e) => {
+                             const valStr = e.target.value;
+                             if (valStr === '') {
+                                 const newSecs = [...weightSections];
+                                 newSecs[idx].start = '';
+                                 setWeightSections(newSecs);
+                                 return;
+                             }
+                             let val = parseInt(valStr);
+                             if (val < 1) val = 1; 
+                             const newSecs = [...weightSections];
+                             newSecs[idx].start = val;
+                             setWeightSections(newSecs);
+                         }} placeholder="Start" />
+                         <span>-</span>
+                         <input type="number" min="1" className="w-12 p-1 border rounded text-center" value={section.end} 
+                         onChange={(e) => {
+                             const valStr = e.target.value;
+                             if (valStr === '') {
+                                 const newSecs = [...weightSections];
+                                 newSecs[idx].end = '';
+                                 setWeightSections(newSecs);
+                                 return;
+                             }
+                             let val = parseInt(valStr);
+                             if (val < 1) val = 1; 
+                             const newSecs = [...weightSections];
+                             newSecs[idx].end = val;
+                             setWeightSections(newSecs);
+                         }} 
+                         onBlur={() => {
+                             const newSecs = [...weightSections];
+                             const s = newSecs[idx].start;
+                             const e = newSecs[idx].end;
+                             if (s !== '' && e !== '' && e < s) {
+                                 newSecs[idx].end = s; 
+                                 setWeightSections(newSecs);
+                             }
+                         }}
+                         placeholder="End" />
+                         <span>:</span>
+                         <input type="number" min="0.1" step="0.5" className="w-10 p-1 border rounded text-center bg-white" value={section.mark} onChange={(e) => {
+                             const valStr = e.target.value;
+                             if (valStr === '') {
+                                 const newSecs = [...weightSections];
+                                 newSecs[idx].mark = '';
+                                 setWeightSections(newSecs);
+                                 return;
+                             }
+                             let val = parseFloat(valStr);
+                             if (val <= 0) val = 1; 
+                             if (isNaN(val)) val = 1;
+                             const newSecs = [...weightSections];
+                             newSecs[idx].mark = val;
+                             setWeightSections(newSecs);
+                         }} placeholder="Mark" />
+                         {weightSections.length > 1 && (
+                             <button onClick={() => setWeightSections(weightSections.filter(s => s.id !== section.id))} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>
+                         )}
+                     </div>
+                 ))}
+                 <button onClick={() => {
+                     const lastEnd = weightSections[weightSections.length-1].end;
+                     setWeightSections([...weightSections, { id: Date.now(), start: lastEnd + 1, end: lastEnd + 10, mark: 1 }]);
+                 }} className="w-full py-1 text-xs bg-blue-50 text-blue-600 rounded border border-blue-200 hover:bg-blue-100">+ Add Range</button>
+             </div>
+         )}
+      </div>
+  );
+
+  // --- UI Components ---
   return (
     <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden">
       <style>{`:root, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; max-width: none !important; }`}</style>
@@ -838,7 +927,7 @@ const App = () => {
         <div className="p-4 border-b border-slate-200 bg-slate-900 text-white">
           <h1 className="text-xl font-bold flex items-center gap-2">
             <ScanSearch className="w-6 h-6 text-blue-400" />
-            Auto Grader
+            MC Auto Grader
           </h1>
           <p className="text-xs text-slate-400 mt-1">Specialized for Ho Fung College</p>
         </div>
@@ -869,104 +958,40 @@ const App = () => {
           </div>
 
           {/* 3. Weights */}
+          {renderWeightSettings()}
+
+          {/* 4. Template Settings Dropdown */}
           <div className="space-y-2">
-             <button onClick={() => setIsMarksSettingsOpen(!isMarksSettingsOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-slate-500 tracking-wider hover:text-slate-700">
-                <div className="flex items-center gap-2"><Hash className="w-4 h-4"/> Question Weighting</div>
-                {isMarksSettingsOpen ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
+            <button onClick={() => setIsTemplateSettingsOpen(!isTemplateSettingsOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-slate-500 tracking-wider hover:text-slate-700">
+                <div className="flex items-center gap-2"><LayoutTemplate className="w-4 h-4"/>Alignment</div>
+                {isTemplateSettingsOpen ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
              </button>
-             {isMarksSettingsOpen && (
-                 <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 space-y-2">
-                     {weightSections.map((section, idx) => (
-                         <div key={section.id} className="flex items-center gap-1 text-xs">
-                             <input type="number" min="1" className="w-12 p-1 border rounded text-center bg-white" value={section.start} onChange={(e) => {
-                                 const valStr = e.target.value;
-                                 if (valStr === '') {
-                                     const newSecs = [...weightSections];
-                                     newSecs[idx].start = '';
-                                     setWeightSections(newSecs);
-                                     return;
-                                 }
-                                 let val = parseInt(valStr);
-                                 if (val < 1) val = 1; 
-                                 const newSecs = [...weightSections];
-                                 newSecs[idx].start = val;
-                                 setWeightSections(newSecs);
-                             }} placeholder="Start" />
-                             <span>-</span>
-                             <input type="number" min="1" className="w-12 p-1 border rounded text-center bg-white" value={section.end} 
-                             onChange={(e) => {
-                                 const valStr = e.target.value;
-                                 if (valStr === '') {
-                                     const newSecs = [...weightSections];
-                                     newSecs[idx].end = '';
-                                     setWeightSections(newSecs);
-                                     return;
-                                 }
-                                 let val = parseInt(valStr);
-                                 if (val < 1) val = 1; 
-                                 const newSecs = [...weightSections];
-                                 newSecs[idx].end = val;
-                                 setWeightSections(newSecs);
-                             }} 
-                             onBlur={() => {
-                                 const newSecs = [...weightSections];
-                                 const s = newSecs[idx].start;
-                                 const e = newSecs[idx].end;
-                                 if (s !== '' && e !== '' && e < s) {
-                                     newSecs[idx].end = s; 
-                                     setWeightSections(newSecs);
-                                 }
-                             }}
-                             placeholder="End" />
-                             <span>:</span>
-                             <input type="number" min="0.1" step="0.5" className="w-10 p-1 border rounded text-center bg-white" value={section.mark} onChange={(e) => {
-                                 const valStr = e.target.value;
-                                 if (valStr === '') {
-                                     const newSecs = [...weightSections];
-                                     newSecs[idx].mark = '';
-                                     setWeightSections(newSecs);
-                                     return;
-                                 }
-                                 let val = parseFloat(valStr);
-                                 if (val <= 0) val = 1; 
-                                 if (isNaN(val)) val = 1;
-                                 const newSecs = [...weightSections];
-                                 newSecs[idx].mark = val;
-                                 setWeightSections(newSecs);
-                             }} placeholder="Mark" />
-                             {weightSections.length > 1 && (
-                                 <button onClick={() => setWeightSections(weightSections.filter(s => s.id !== section.id))} className="text-red-400 hover:text-red-600"><X className="w-3 h-3"/></button>
-                             )}
-                         </div>
-                     ))}
-                     <button onClick={() => {
-                         const lastEnd = weightSections[weightSections.length-1].end;
-                         setWeightSections([...weightSections, { id: Date.now(), start: lastEnd + 1, end: lastEnd + 10, mark: 1 }]);
-                     }} className="w-full py-1 text-xs bg-blue-50 text-blue-600 rounded border border-blue-200 hover:bg-blue-100">+ Add Range</button>
+             
+             {isTemplateSettingsOpen && (
+                 <div className="space-y-4 pt-2">
+                    <div className="p-4 bg-blue-50 text-blue-800 text-sm rounded-lg border border-blue-100">
+                        <h3 className="font-bold mb-2 flex items-center gap-2"><ScanLine className="w-4 h-4"/> Auto-Align Active</h3>
+                        <p className="text-xs mb-2">Drag <strong>top boxes</strong> to align.</p>
+                        <button onClick={resetTemplate} className="w-full py-2 mt-3 text-xs font-medium text-blue-700 bg-blue-100 rounded-lg hover:bg-blue-200 transition-colors flex justify-center items-center gap-2">
+                            <RotateCw className="w-3 h-3" />
+                            Realign Boxes
+                        </button>
+                    </div>
+
+                    {currentRegions.length > 0 && (
+                        <div className="space-y-2">
+                        <label className="text-xs font-semibold uppercase text-slate-500 tracking-wider">Blocks (Page {currentPageIndex + 1})</label>
+                        {currentRegions.sort((a,b) => a.y - b.y).map((r, i) => (
+                            <button key={r.id} onClick={() => setSelectedRegionId(r.id)} className={`w-full text-left px-3 py-2 rounded text-sm flex justify-between items-center ${selectedRegionId === r.id ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-white border hover:bg-slate-50'}`}>
+                                <span>{r.type === 'id' ? (r.id.includes('level') ? 'Form' : r.id.includes('letter') ? 'Class' : 'Number') : `Questions`}</span>
+                                <ChevronRight className="w-4 h-4 opacity-50" />
+                            </button>
+                        ))}
+                        </div>
+                    )}
                  </div>
              )}
           </div>
-
-          <div className="p-4 bg-blue-50 text-blue-800 text-sm rounded-lg border border-blue-100">
-             <h3 className="font-bold mb-2 flex items-center gap-2"><ScanLine className="w-4 h-4"/> Auto-Align Active</h3>
-             <p className="text-xs mb-2">Drag <strong>red boxes</strong> to align.</p>
-             <button onClick={resetTemplate} className="w-full py-2 mt-3 text-xs font-medium text-blue-700 bg-blue-100 rounded-lg hover:bg-blue-200 transition-colors flex justify-center items-center gap-2">
-                 <RotateCw className="w-3 h-3" />
-                 Realign Boxes
-             </button>
-          </div>
-
-          {currentRegions.length > 0 && (
-            <div className="space-y-2">
-              <label className="text-xs font-semibold uppercase text-slate-500 tracking-wider">Blocks (Page {currentPageIndex + 1})</label>
-              {currentRegions.sort((a,b) => a.y - b.y).map((r, i) => (
-                  <button key={r.id} onClick={() => setSelectedRegionId(r.id)} className={`w-full text-left px-3 py-2 rounded text-sm flex justify-between items-center ${selectedRegionId === r.id ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-white border hover:bg-slate-50'}`}>
-                    <span>{r.type === 'id' ? (r.id.includes('level') ? 'Form' : r.id.includes('letter') ? 'Class' : 'Number') : `Questions`}</span>
-                    <ChevronRight className="w-4 h-4 opacity-50" />
-                  </button>
-              ))}
-            </div>
-          )}
         </div>
 
         {/* Footer */}
