@@ -831,7 +831,7 @@ const App = () => {
   // --- Marks Settings Component ---
   const renderWeightSettings = () => (
       <div className="space-y-2">
-         <button onClick={() => setIsMarksSettingsOpen(!isMarksSettingsOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-slate-500 tracking-wider hover:text-slate-700">
+         <button onClick={() => setIsMarksSettingsOpen(!isMarksSettingsOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-slate-500 tracking-wider hover:text-slate-700 bg-white">
             <div className="flex items-center gap-2"><Hash className="w-4 h-4"/> Question Weighting</div>
             {isMarksSettingsOpen ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
          </button>
@@ -839,7 +839,7 @@ const App = () => {
              <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 space-y-2">
                  {weightSections.map((section, idx) => (
                      <div key={section.id} className="flex items-center gap-1 text-xs">
-                         <input type="number" min="1" className="w-12 p-1 border rounded text-center" value={section.start} onChange={(e) => {
+                         <input type="number" min="1" className="w-12 p-1 border rounded text-center bg-white" value={section.start} onChange={(e) => {
                              const valStr = e.target.value;
                              if (valStr === '') {
                                  const newSecs = [...weightSections];
@@ -854,7 +854,7 @@ const App = () => {
                              setWeightSections(newSecs);
                          }} placeholder="Start" />
                          <span>-</span>
-                         <input type="number" min="1" className="w-12 p-1 border rounded text-center" value={section.end} 
+                         <input type="number" min="1" className="w-12 p-1 border rounded text-center bg-white" value={section.end} 
                          onChange={(e) => {
                              const valStr = e.target.value;
                              if (valStr === '') {
@@ -962,7 +962,7 @@ const App = () => {
 
           {/* 4. Template Settings Dropdown */}
           <div className="space-y-2">
-            <button onClick={() => setIsTemplateSettingsOpen(!isTemplateSettingsOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-slate-500 tracking-wider hover:text-slate-700">
+            <button onClick={() => setIsTemplateSettingsOpen(!isTemplateSettingsOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-slate-500 tracking-wider hover:text-slate-700 bg-white">
                 <div className="flex items-center gap-2"><LayoutTemplate className="w-4 h-4"/>Alignment</div>
                 {isTemplateSettingsOpen ? <ChevronUp className="w-4 h-4"/> : <ChevronDown className="w-4 h-4"/>}
              </button>
@@ -1021,16 +1021,16 @@ const App = () => {
                {file ? <span className="font-semibold text-slate-900 truncate max-w-[200px]">{file.name}</span> : <span>No file loaded</span>}
                {pages.length > 1 && (
                    <div className="flex items-center bg-slate-100 rounded-lg p-1 gap-2 ml-4">
-                       <button onClick={() => { setCurrentPageIndex(p => Math.max(0, p - 1)); setSelectedRegionId(null); }} disabled={currentPageIndex === 0} className="p-1 hover:bg-white rounded shadow-sm disabled:opacity-30"><ChevronLeft className="w-4 h-4"/></button>
+                       <button onClick={() => { setCurrentPageIndex(p => Math.max(0, p - 1)); setSelectedRegionId(null); }} disabled={currentPageIndex === 0} className="p-1 hover:bg-white rounded shadow-sm disabled:opacity-30 bg-slate-100"><ChevronLeft className="w-4 h-4"/></button>
                        <span className="text-xs font-mono min-w-[60px] text-center">Page {currentPageIndex + 1} / {pages.length}</span>
-                       <button onClick={() => { setCurrentPageIndex(p => Math.min(pages.length - 1, p + 1)); setSelectedRegionId(null); }} disabled={currentPageIndex === pages.length - 1} className="p-1 hover:bg-white rounded shadow-sm disabled:opacity-30"><ChevronRight className="w-4 h-4"/></button>
+                       <button onClick={() => { setCurrentPageIndex(p => Math.min(pages.length - 1, p + 1)); setSelectedRegionId(null); }} disabled={currentPageIndex === pages.length - 1} className="p-1 hover:bg-white rounded shadow-sm disabled:opacity-30 bg-slate-100"><ChevronRight className="w-4 h-4"/></button>
                    </div>
                )}
            </div>
            <div className="flex items-center gap-2">
-               <button onClick={() => setScale(s => Math.max(0.2, s - 0.1))} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ZoomOut className="w-5 h-5"/></button>
+               <button onClick={() => setScale(s => Math.max(0.2, s - 0.1))} className="p-1.5 hover:bg-slate-100 rounded text-slate-600 bg-white"><ZoomOut className="w-5 h-5"/></button>
                <span className="text-xs font-mono w-12 text-center">{Math.round(scale * 100)}%</span>
-               <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className="p-1.5 hover:bg-slate-100 rounded text-slate-600"><ZoomIn className="w-5 h-5"/></button>
+               <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className="p-1.5 hover:bg-slate-100 rounded text-slate-600 bg-white"><ZoomIn className="w-5 h-5"/></button>
            </div>
         </div>
 
@@ -1055,7 +1055,7 @@ const App = () => {
                         <UserSquare2 className="w-4 h-4 text-blue-500"/>
                         {getPageName(currentPage, currentPageIndex)}
                     </h3>
-                    <button onClick={() => setShowResults(false)} className="text-slate-400 hover:text-slate-600"><ChevronDown/></button>
+                    <button onClick={() => setShowResults(false)} className="text-slate-400 hover:text-slate-600 bg-slate-50"><ChevronDown/></button>
                 </div>
                 <div className="flex-1 overflow-auto p-4">
                     <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
