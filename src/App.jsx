@@ -128,15 +128,33 @@ const App = () => {
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [pages, isProcessing, showResults]);
 
-    // --- Answer Key Parsing Logic ---
+    // --- Strict Answer Key Parsing Logic ---
     useEffect(() => {
-        const matches = answerKeyInput.toUpperCase().match(/[A-D]/g);
+        const rawText = answerKeyInput.toUpperCase();
+        // Split by whitespace to handle words/tokens individually
+        const tokens = rawText.split(/\s+/);
+        
         const keyMap = {};
-        if (matches) {
-            matches.forEach((char, index) => {
-                keyMap[index + 1] = char;
-            });
-        }
+        let currentIndex = 1;
+
+        tokens.forEach(token => {
+            // Logic:
+            // 1. If token contains any letter [E-Z], it's a word like "Answer" or "Part", ignore it.
+            // 2. If token only contains [A-D] and non-letters (numbers/punctuation), accept it.
+            //    e.g. "1.A" -> OK. "ABCD" -> OK. "Answer" -> Skip.
+            
+            if (!/[E-Z]/.test(token)) {
+                // Extract valid answer characters
+                const matches = token.match(/[A-D]/g);
+                if (matches) {
+                    matches.forEach(char => {
+                        keyMap[currentIndex] = char;
+                        currentIndex++;
+                    });
+                }
+            }
+        });
+
         setParsedAnswerKey(keyMap);
     }, [answerKeyInput]);
 
@@ -392,7 +410,7 @@ const App = () => {
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
             const regionsToDraw = currentPage.regions || [];
             regionsToDraw.forEach(region => {
-                ctx.strokeStyle = region.id === selectedRegionId ? '#3b82f6' : '#ef4444';
+                ctx.strokeStyle = region.id === selectedRegionId ? '#60a5fa' : '#ef4444';
                 ctx.lineWidth = 2;
                 const x = region.x * scale;
                 const y = region.y * scale;
@@ -410,7 +428,7 @@ const App = () => {
                         ctx.fillRect(x, rowY, w, rowH);
                     } else {
                         if (idx > 0) {
-                            ctx.strokeStyle = region.id === selectedRegionId ? 'rgba(59, 130, 246, 0.5)' : 'rgba(239, 68, 68, 0.3)';
+                            ctx.strokeStyle = region.id === selectedRegionId ? 'rgba(96, 165, 250, 0.5)' : 'rgba(239, 68, 68, 0.3)';
                             ctx.beginPath();
                             ctx.moveTo(x, rowY);
                             ctx.lineTo(x + w, rowY);
@@ -419,7 +437,7 @@ const App = () => {
                     }
                 });
                 ctx.beginPath();
-                ctx.strokeStyle = region.id === selectedRegionId ? 'rgba(59, 130, 246, 0.5)' : 'rgba(239, 68, 68, 0.3)';
+                ctx.strokeStyle = region.id === selectedRegionId ? 'rgba(96, 165, 250, 0.5)' : 'rgba(239, 68, 68, 0.3)';
                 for (let i = 1; i < region.cols; i++) {
                     ctx.moveTo(x + i * cellW, y);
                     ctx.lineTo(x + i * cellW, y + h);
@@ -446,20 +464,19 @@ const App = () => {
                         if (!rLayout) return;
                         if (region.type === 'id') {
                             if (ans.label === 'BLANK') return;
-                            let fillStyle = 'rgba(59, 130, 246, 0.5)';
-                            if (ans.label === 'MULT') fillStyle = 'rgba(249, 115, 22, 0.4)';
+                            let fillStyle = 'rgba(96, 165, 250, 0.5)'; // Blue 400
+                            if (ans.label === 'MULT') fillStyle = 'rgba(251, 146, 60, 0.4)'; // Orange 400
                             ctx.fillStyle = fillStyle;
-                            // Use 10% padding for visual feedback
                             const padX = w * 0.10;
                             const padY = rLayout.h * 0.10;
                             ctx.fillRect(x + padX, y + rLayout.y + padY, w - (padX * 2), rLayout.h - (padY * 2));
                             return;
                         }
                         const correctAns = parsedAnswerKey[ans.qNum];
-                        let fillStyle = 'rgba(34, 197, 94, 0.5)';
+                        let fillStyle = 'rgba(74, 222, 128, 0.5)'; // Green 400
                         if (correctAns) {
-                            if (ans.label === correctAns) fillStyle = 'rgba(34, 197, 94, 0.6)';
-                            else fillStyle = 'rgba(239, 68, 68, 0.6)';
+                            if (ans.label === correctAns) fillStyle = 'rgba(74, 222, 128, 0.6)'; // Green
+                            else fillStyle = 'rgba(248, 113, 113, 0.6)'; // Red 400
                         }
                         if (ans.detectedIndex !== -1 && ans.label !== 'MULT' && ans.label !== 'BLANK') {
                             const bubbleX = x + (ans.detectedIndex * cellW);
@@ -468,7 +485,7 @@ const App = () => {
                             ctx.fillRect(bubbleX + 2, bubbleY + 2, cellW - 4, rLayout.h - 4);
                         } else if (ans.label === 'MULT') {
                             const bubbleY = y + rLayout.y;
-                            ctx.fillStyle = 'rgba(249, 115, 22, 0.4)';
+                            ctx.fillStyle = 'rgba(251, 146, 60, 0.4)'; // Orange
                             ctx.fillRect(x, bubbleY, w, rLayout.h);
                         }
                     });
@@ -757,11 +774,15 @@ const App = () => {
         const rowNum_Marks = endRow + 3;
         const rowNum_Key = endRow + 6;
 
+        let totalFullMark = 0;
+
         for (let q = 1; q <= maxQ; q++) {
             const colLetter = getExcelCol(q);
             const range = `${colLetter}${startRow}:${colLetter}${endRow}`;
+            const qMark = getQuestionMark(q);
+            totalFullMark += qMark;
 
-            footerRows[IDX_MARKS].push(getQuestionMark(q));
+            footerRows[IDX_MARKS].push(qMark);
 
             const key = parsedAnswerKey[q] || "-";
             footerRows[IDX_KEY].push(key);
@@ -791,6 +812,8 @@ const App = () => {
         const endColLet = getExcelCol(maxQ);
         const refKeyRange = `'All Results'!$${startColLet}$${rowNum_Key}:$${endColLet}$${rowNum_Key}`;
         const refMarksRange = `'All Results'!$${startColLet}$${rowNum_Marks}:$${endColLet}$${rowNum_Marks}`;
+        
+        // Dynamic Full Mark Reference from Sheet 1 (Row `rowNum_Marks`)
         const refTotalMarks = `SUM(${refMarksRange})`;
 
         const scoresData = sortedPages.map((page, index) => {
@@ -822,6 +845,36 @@ const App = () => {
         }
 
         window.XLSX.utils.book_append_sheet(wb, wsScores, "Scores");
+        
+        // --- SHEET 3: STATISTICS (New) ---
+        // References to Scores Sheet:
+        // Scores are in Col B. Student count is `studentCount`.
+        // Range B2:B(studentCount+1)
+        const scoreRange = `'Scores'!B2:B${studentCount + 1}`;
+        const fullMarkRef = refTotalMarks; 
+
+        const statsData = [
+            ["Metric", "Value"],
+            ["Full Mark", { t:'n', f: fullMarkRef }], 
+            ["Max", { t:'n', f: `MAX(${scoreRange})` }],
+            ["Min", { t:'n', f: `MIN(${scoreRange})` }],
+            ["Mean", { t:'n', f: `AVERAGE(${scoreRange})`, z:'0.00' }],
+            ["Median", { t:'n', f: `MEDIAN(${scoreRange})` }],
+            ["SD", { t:'n', f: `STDEVP(${scoreRange})`, z:'0.00' }],
+            ["Passing Score (50%)", { t:'n', f: `B2*0.5` }], // B2 is Full Mark
+            ["No. of Passes", { t:'n', f: `COUNTIF(${scoreRange},">="&B8)` }], // B8 is Passing Score 50%
+            ["Passing Rate", { t:'n', f: `B9/${studentCount}`, z:'0.0%' }],
+            ["Passing Score (40%)", { t:'n', f: `B2*0.4` }], 
+            ["No. of Passes", { t:'n', f: `COUNTIF(${scoreRange},">="&B11)` }], // B11 is Passing Score 40%
+            ["Passing Rate", { t:'n', f: `B12/${studentCount}`, z:'0.0%' }]
+        ];
+        
+        const wsStats = window.XLSX.utils.aoa_to_sheet(statsData);
+        
+        // Adjust column width for Stats sheet
+        wsStats['!cols'] = [{ wch: 25 }, { wch: 15 }];
+        
+        window.XLSX.utils.book_append_sheet(wb, wsStats, "Statistics");
 
         window.XLSX.writeFile(wb, `${file ? file.name.replace(/\.[^/.]+$/, "") : "results"}_results.xlsx`);
         setToast("Results exported successfully!");
@@ -831,15 +884,15 @@ const App = () => {
     // --- Marks Settings Component ---
     const renderWeightSettings = () => (
         <div className="space-y-2">
-            <button onClick={() => setIsMarksSettingsOpen(!isMarksSettingsOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-slate-500 tracking-wider hover:text-slate-700 bg-white">
+            <button onClick={() => setIsMarksSettingsOpen(!isMarksSettingsOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-slate-400 tracking-wider hover:text-slate-200 bg-slate-800 p-2 rounded border border-slate-700 transition-colors">
                 <div className="flex items-center gap-2"><Hash className="w-4 h-4" /> Question Weighting</div>
                 {isMarksSettingsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
             </button>
             {isMarksSettingsOpen && (
-                <div className="bg-slate-50 p-2 rounded-lg border border-slate-200 space-y-2">
+                <div className="bg-slate-900 p-2 rounded-lg border border-slate-700 space-y-2">
                     {weightSections.map((section, idx) => (
                         <div key={section.id} className="flex items-center gap-1 text-xs">
-                            <input type="number" min="1" className="w-12 p-1 border rounded text-center bg-white" value={section.start} onChange={(e) => {
+                            <input type="number" min="1" className="w-12 p-1 border border-slate-600 rounded text-center bg-slate-800 text-slate-200" value={section.start} onChange={(e) => {
                                 const valStr = e.target.value;
                                 if (valStr === '') {
                                     const newSecs = [...weightSections];
@@ -853,8 +906,8 @@ const App = () => {
                                 newSecs[idx].start = val;
                                 setWeightSections(newSecs);
                             }} placeholder="Start" />
-                            <span>-</span>
-                            <input type="number" min="1" className="w-12 p-1 border rounded text-center bg-white" value={section.end}
+                            <span className="text-slate-500">-</span>
+                            <input type="number" min="1" className="w-12 p-1 border border-slate-600 rounded text-center bg-slate-800 text-slate-200" value={section.end}
                                 onChange={(e) => {
                                     const valStr = e.target.value;
                                     if (valStr === '') {
@@ -879,8 +932,8 @@ const App = () => {
                                     }
                                 }}
                                 placeholder="End" />
-                            <span>:</span>
-                            <input type="number" min="0.1" step="0.5" className="w-10 p-1 border rounded text-center bg-white" value={section.mark} onChange={(e) => {
+                            <span className="text-slate-500">:</span>
+                            <input type="number" min="0.1" step="0.5" className="w-10 p-1 border border-slate-600 rounded text-center bg-slate-800 text-slate-200" value={section.mark} onChange={(e) => {
                                 const valStr = e.target.value;
                                 if (valStr === '') {
                                     const newSecs = [...weightSections];
@@ -896,14 +949,14 @@ const App = () => {
                                 setWeightSections(newSecs);
                             }} placeholder="Mark" />
                             {weightSections.length > 1 && (
-                                <button onClick={() => setWeightSections(weightSections.filter(s => s.id !== section.id))} className="text-red-400 hover:text-red-600 bg-slate-50"><X className="w-3 h-3" /></button>
+                                <button onClick={() => setWeightSections(weightSections.filter(s => s.id !== section.id))} className="text-red-400 hover:text-red-300 bg-transparent"><X className="w-3 h-3" /></button>
                             )}
                         </div>
                     ))}
                     <button onClick={() => {
                         const lastEnd = weightSections[weightSections.length - 1].end;
                         setWeightSections([...weightSections, { id: Date.now(), start: lastEnd + 1, end: lastEnd + 10, mark: 1 }]);
-                    }} className="w-full py-1 text-xs bg-blue-50 text-blue-600 rounded border border-blue-200 hover:bg-blue-100">+ Add Range</button>
+                    }} className="w-full py-1 text-xs bg-blue-900/30 text-blue-400 rounded border border-blue-800 hover:bg-blue-900/50 transition-colors">+ Add Range</button>
                 </div>
             )}
         </div>
@@ -911,20 +964,20 @@ const App = () => {
 
     // --- UI Components ---
     return (
-        <div className="flex h-screen bg-slate-50 text-slate-800 font-sans overflow-hidden">
+        <div className="flex h-screen bg-slate-950 text-slate-200 font-sans overflow-hidden">
             <style>{`:root, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; max-width: none !important; }`}</style>
 
             {/* Toast Notification */}
             {toast && (
-                <div className="fixed bottom-4 right-4 bg-slate-800 text-white px-4 py-2 rounded shadow-lg flex items-center gap-2 z-50 animate-bounce">
-                    <CheckCircle2 className="w-4 h-4 text-green-400" />
+                <div className="fixed bottom-4 right-4 bg-emerald-600 text-white px-4 py-2 rounded shadow-lg flex items-center gap-2 z-50 animate-bounce">
+                    <CheckCircle2 className="w-4 h-4 text-white" />
                     {toast}
                 </div>
             )}
 
             {/* LEFT SIDEBAR */}
-            <div className="w-80 bg-white border-r border-slate-200 flex flex-col shadow-xl z-10">
-                <div className="p-4 border-b border-slate-200 bg-slate-900 text-white">
+            <div className="w-80 bg-slate-900 border-r border-slate-700 flex flex-col shadow-xl z-10">
+                <div className="p-4 border-b border-slate-700 bg-slate-900 text-white">
                     <h1 className="text-xl font-bold flex items-center gap-2">
                         <ScanSearch className="w-6 h-6 text-blue-400" />
                         MC Auto Grader
@@ -935,26 +988,26 @@ const App = () => {
                 <div className="flex-1 overflow-y-auto p-4 space-y-6">
                     {/* 1. Upload */}
                     <div className="space-y-2">
-                        <label className="text-xs font-semibold uppercase text-slate-500 tracking-wider">1. Load Sheet</label>
+                        <label className="text-xs font-semibold uppercase text-slate-400 tracking-wider">1. Load Sheet</label>
                         <div className="relative group">
                             <input id="file-upload-input" type="file" onChange={handleFileUpload} className="absolute inset-0 w-full h-full opacity-0 cursor-pointer" accept=".pdf,.jpg,.jpeg,.png" />
-                            <div className="border-2 border-dashed border-slate-300 rounded-lg p-6 text-center group-hover:border-blue-500 group-hover:bg-blue-50 transition-colors">
+                            <div className="border-2 border-dashed border-slate-600 rounded-lg p-6 text-center group-hover:border-blue-500 group-hover:bg-slate-800 transition-colors">
                                 <Upload className="w-8 h-8 mx-auto text-slate-400 mb-2 group-hover:text-blue-500" />
-                                <span className="text-sm font-medium text-slate-600">Upload PDF / Image</span>
-                                <span className="block text-xs text-slate-400 mt-1">Ctrl+O</span>
+                                <span className="text-sm font-medium text-slate-300">Upload PDF / Image</span>
+                                <span className="block text-xs text-slate-500 mt-1">Ctrl+O</span>
                             </div>
                         </div>
-                        {pages.length > 0 && <div className="text-xs text-center text-slate-500 mt-1">{pages.length} page(s) loaded</div>}
+                        {pages.length > 0 && <div className="text-xs text-center text-slate-400 mt-1">{pages.length} page(s) loaded</div>}
                     </div>
 
                     {/* 2. Key */}
                     <div className="space-y-2">
-                        <label className="text-xs font-semibold uppercase text-slate-500 tracking-wider flex items-center gap-2">
+                        <label className="text-xs font-semibold uppercase text-slate-400 tracking-wider flex items-center gap-2">
                             <GraduationCap className="w-4 h-4" />
                             Answer Key
                         </label>
-                        <textarea placeholder="Paste answers (e.g. '1.A 2.B', 'ABCDA')" className="w-full h-24 p-2 text-sm border border-slate-300 rounded bg-slate-50 focus:bg-white transition-colors outline-none font-mono" value={answerKeyInput} onChange={(e) => setAnswerKeyInput(e.target.value)} />
-                        <div className="text-xs text-slate-400">Found {Object.keys(parsedAnswerKey).length} answers.</div>
+                        <textarea placeholder="Paste answers (e.g. '1.A 2.B', 'ABCDA')" className="w-full h-24 p-2 text-sm border border-slate-600 rounded bg-slate-800 text-slate-200 focus:bg-slate-700 transition-colors outline-none font-mono placeholder-slate-500" value={answerKeyInput} onChange={(e) => setAnswerKeyInput(e.target.value)} />
+                        <div className="text-xs text-slate-500">Found {Object.keys(parsedAnswerKey).length} answers.</div>
                     </div>
 
                     {/* 3. Weights */}
@@ -962,17 +1015,17 @@ const App = () => {
 
                     {/* 4. Template Settings Dropdown */}
                     <div className="space-y-2">
-                        <button onClick={() => setIsTemplateSettingsOpen(!isTemplateSettingsOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-slate-500 tracking-wider hover:text-slate-700 bg-white">
+                        <button onClick={() => setIsTemplateSettingsOpen(!isTemplateSettingsOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-slate-400 tracking-wider hover:text-slate-200 bg-slate-800 p-2 rounded border border-slate-700 transition-colors">
                             <div className="flex items-center gap-2"><LayoutTemplate className="w-4 h-4" />Alignment</div>
                             {isTemplateSettingsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
                         </button>
 
                         {isTemplateSettingsOpen && (
                             <div className="space-y-4 pt-2">
-                                <div className="p-4 bg-blue-50 text-blue-800 text-sm rounded-lg border border-blue-100">
+                                <div className="p-4 bg-blue-900/20 text-blue-300 text-sm rounded-lg border border-blue-800">
                                     <h3 className="font-bold mb-2 flex items-center gap-2"><ScanLine className="w-4 h-4" /> Auto-Align Active</h3>
-                                    <p className="text-xs mb-2">Drag <strong>top boxes</strong> to align.</p>
-                                    <button onClick={resetTemplate} className="w-full py-2 mt-3 text-xs font-medium text-blue-700 bg-blue-100 rounded-lg hover:bg-blue-200 transition-colors flex justify-center items-center gap-2">
+                                    <p className="text-xs mb-2 text-slate-400">Drag <strong>top boxes</strong> to align.</p>
+                                    <button onClick={resetTemplate} className="w-full py-2 mt-3 text-xs font-medium text-white bg-blue-600 rounded-lg hover:bg-blue-500 transition-colors flex justify-center items-center gap-2">
                                         <RotateCw className="w-3 h-3" />
                                         Realign Boxes
                                     </button>
@@ -980,9 +1033,9 @@ const App = () => {
 
                                 {currentRegions.length > 0 && (
                                     <div className="space-y-2">
-                                        <label className="text-xs font-semibold uppercase text-slate-500 tracking-wider">Blocks (Page {currentPageIndex + 1})</label>
+                                        <label className="text-xs font-semibold uppercase text-slate-400 tracking-wider">Blocks (Page {currentPageIndex + 1})</label>
                                         {currentRegions.sort((a, b) => a.y - b.y).map((r, i) => (
-                                            <button key={r.id} onClick={() => setSelectedRegionId(r.id)} className={`w-full text-left px-3 py-2 rounded text-sm flex justify-between items-center ${selectedRegionId === r.id ? 'bg-blue-100 text-blue-700 border border-blue-200' : 'bg-white border hover:bg-slate-50'}`}>
+                                            <button key={r.id} onClick={() => setSelectedRegionId(r.id)} className={`w-full text-left px-3 py-2 rounded text-sm flex justify-between items-center ${selectedRegionId === r.id ? 'bg-blue-900/50 text-blue-300 border border-blue-700' : 'bg-slate-800 border border-slate-700 hover:bg-slate-700 text-slate-300'}`}>
                                                 <span>{r.type === 'id' ? (r.id.includes('level') ? 'Form' : r.id.includes('letter') ? 'Class' : 'Number') : `Questions`}</span>
                                                 <ChevronRight className="w-4 h-4 opacity-50" />
                                             </button>
@@ -995,8 +1048,8 @@ const App = () => {
                 </div>
 
                 {/* Footer */}
-                <div className="p-4 border-t border-slate-200 bg-slate-50 space-y-2">
-                    <button onClick={runBatchDetection} disabled={pages.length === 0 || isProcessing} className="w-full bg-slate-900 text-white py-3 rounded-lg font-medium hover:bg-slate-800 transition-colors disabled:opacity-50 flex justify-center items-center gap-2">
+                <div className="p-4 border-t border-slate-700 bg-slate-900 space-y-2">
+                    <button onClick={runBatchDetection} disabled={pages.length === 0 || isProcessing} className="w-full bg-blue-600 text-white py-3 rounded-lg font-medium hover:bg-blue-500 transition-colors disabled:opacity-50 flex justify-center items-center gap-2">
                         {isProcessing ? (
                             <><Loader2 className="w-4 h-4 animate-spin" /> Scanning {progress.current} / {progress.total}</>
                         ) : (
@@ -1004,43 +1057,43 @@ const App = () => {
                         )}
                     </button>
                     {showResults && (
-                        <button onClick={exportExcel} className="w-full bg-green-600 text-white py-3 rounded-lg font-medium hover:bg-green-700 transition-colors flex justify-center items-center gap-2">
+                        <button onClick={exportExcel} className="w-full bg-emerald-600 text-white py-3 rounded-lg font-medium hover:bg-emerald-500 transition-colors flex justify-center items-center gap-2">
                             <FileSpreadsheet className="w-5 h-5" /> Export Results <span className="text-xs opacity-50 ml-1">(Ctrl+E)</span>
                         </button>
                     )}
-                    <div className="text-[10px] text-center text-slate-400 mt-2 italic">
+                    <div className="text-[10px] text-center text-slate-500 mt-2 italic">
                         Your file will not be stored in any servers. Auto Grader may make an error, please review it.
                     </div>
                 </div>
             </div>
 
             {/* MAIN WORKSPACE */}
-            <div className="flex-1 flex flex-col bg-slate-100 relative">
-                <div className="h-12 bg-white border-b border-slate-200 flex items-center px-4 justify-between">
-                    <div className="flex items-center gap-4 text-sm text-slate-600">
-                        {file ? <span className="font-semibold text-slate-900 truncate max-w-[200px]">{file.name}</span> : <span>No file loaded</span>}
+            <div className="flex-1 flex flex-col bg-slate-950 relative">
+                <div className="h-14 bg-slate-900 border-b border-slate-700 flex items-center px-4 justify-between">
+                    <div className="flex items-center gap-4 text-sm text-slate-400 overflow-hidden">
+                        {file ? <span className="font-semibold text-slate-200 truncate max-w-[300px]">{file.name}</span> : <span>No file loaded</span>}
                         {pages.length > 1 && (
-                            <div className="flex items-center bg-slate-100 rounded-lg p-1 gap-2 ml-4">
-                                <button onClick={() => { setCurrentPageIndex(p => Math.max(0, p - 1)); setSelectedRegionId(null); }} disabled={currentPageIndex === 0} className="p-1 hover:bg-white rounded shadow-sm disabled:opacity-30 bg-slate-100"><ChevronLeft className="w-4 h-4" /></button>
-                                <span className="text-xs font-mono min-w-[60px] text-center">Page {currentPageIndex + 1} / {pages.length}</span>
-                                <button onClick={() => { setCurrentPageIndex(p => Math.min(pages.length - 1, p + 1)); setSelectedRegionId(null); }} disabled={currentPageIndex === pages.length - 1} className="p-1 hover:bg-white rounded shadow-sm disabled:opacity-30 bg-slate-100"><ChevronRight className="w-4 h-4" /></button>
+                            <div className="flex items-center bg-slate-800 rounded-lg p-1 gap-2 ml-4">
+                                <button onClick={() => { setCurrentPageIndex(p => Math.max(0, p - 1)); setSelectedRegionId(null); }} disabled={currentPageIndex === 0} className="p-1 hover:bg-slate-700 rounded shadow-sm disabled:opacity-30 text-white bg-slate-800"><ChevronLeft className="w-4 h-4" /></button>
+                                <span className="text-xs font-mono min-w-[60px] text-center text-slate-300">Page {currentPageIndex + 1} / {pages.length}</span>
+                                <button onClick={() => { setCurrentPageIndex(p => Math.min(pages.length - 1, p + 1)); setSelectedRegionId(null); }} disabled={currentPageIndex === pages.length - 1} className="p-1 hover:bg-slate-700 rounded shadow-sm disabled:opacity-30 text-white bg-slate-800"><ChevronRight className="w-4 h-4" /></button>
                             </div>
                         )}
                     </div>
                     <div className="flex items-center gap-2">
-                        <button onClick={() => setScale(s => Math.max(0.2, s - 0.1))} className="p-1.5 hover:bg-slate-100 rounded text-slate-600 bg-white"><ZoomOut className="w-5 h-5" /></button>
-                        <span className="text-xs font-mono w-12 text-center">{Math.round(scale * 100)}%</span>
-                        <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className="p-1.5 hover:bg-slate-100 rounded text-slate-600 bg-white"><ZoomIn className="w-5 h-5" /></button>
+                        <button onClick={() => setScale(s => Math.max(0.2, s - 0.1))} className="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors bg-slate-900"><ZoomOut className="w-5 h-5" /></button>
+                        <span className="text-xs font-mono w-12 text-center text-slate-400">{Math.round(scale * 100)}%</span>
+                        <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className="p-1.5 hover:bg-slate-800 rounded text-slate-400 hover:text-white transition-colors bg-slate-900"><ZoomIn className="w-5 h-5" /></button>
                     </div>
                 </div>
 
-                <div ref={containerRef} className="flex-1 overflow-auto p-8 flex justify-center items-start">
+                <div ref={containerRef} className="flex-1 overflow-auto p-8 flex justify-center items-start bg-slate-950">
                     {currentPage ? (
-                        <div className="relative shadow-2xl">
+                        <div className="relative shadow-2xl border border-slate-800">
                             <canvas ref={canvasRef} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} className={`bg-white ${selectedRegionId ? 'cursor-move' : 'cursor-default'}`} />
                         </div>
                     ) : (
-                        <div className="flex flex-col items-center justify-center h-full text-slate-400">
+                        <div className="flex flex-col items-center justify-center h-full text-slate-600">
                             <Layers className="w-24 h-24 mb-4 opacity-20" />
                             <p>Upload a PDF to view pages</p>
                         </div>
@@ -1049,31 +1102,31 @@ const App = () => {
 
                 {/* Results Panel */}
                 {showResults && currentPage && currentPage.results && (
-                    <div className="absolute bottom-0 left-0 right-0 bg-white border-t border-slate-200 shadow-xl max-h-[300px] flex flex-col transition-transform">
-                        <div className="px-4 py-2 border-b border-slate-100 flex justify-between items-center bg-slate-50">
-                            <h3 className="font-bold text-slate-700 flex items-center gap-2">
-                                <UserSquare2 className="w-4 h-4 text-blue-500" />
+                    <div className="absolute bottom-0 left-0 right-0 bg-slate-900 border-t border-slate-700 shadow-xl max-h-[300px] flex flex-col transition-transform z-30">
+                        <div className="px-4 py-2 border-b border-slate-800 flex justify-between items-center bg-slate-900">
+                            <h3 className="font-bold text-slate-200 flex items-center gap-2">
+                                <UserSquare2 className="w-4 h-4 text-blue-400" />
                                 {getPageName(currentPage, currentPageIndex)}
                             </h3>
-                            <button onClick={() => setShowResults(false)} className="text-slate-400 hover:text-slate-600 bg-slate-50"><ChevronDown /></button>
+                            <button onClick={() => setShowResults(false)} className="text-slate-400 hover:text-white bg-slate-900"><ChevronDown /></button>
                         </div>
                         <div className="flex-1 overflow-auto p-4">
                             <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-6 gap-2">
                                 {currentRegions.filter(r => r.type === 'answer').sort((a, b) => a.startQ - b.startQ).flatMap(r => currentPage.results[r.id] || []).map((res, idx) => {
-                                    let bgColor = 'bg-slate-50 border-slate-100';
-                                    let textColor = 'text-slate-900';
+                                    let bgColor = 'bg-slate-800 border-slate-700';
+                                    let textColor = 'text-slate-300';
                                     const correctAns = parsedAnswerKey[res.qNum];
-                                    if (res.label === 'BLANK') { bgColor = 'bg-slate-100 border-slate-200'; textColor = 'text-slate-400 italic'; }
-                                    else if (res.label === 'MULT') { bgColor = 'bg-orange-50 border-orange-200'; textColor = 'text-orange-600 font-bold'; }
+                                    if (res.label === 'BLANK') { bgColor = 'bg-slate-800 border-slate-700'; textColor = 'text-slate-500 italic'; }
+                                    else if (res.label === 'MULT') { bgColor = 'bg-orange-900/30 border-orange-800'; textColor = 'text-orange-400 font-bold'; }
                                     else if (correctAns) {
-                                        if (res.label === correctAns) { bgColor = 'bg-green-50 border-green-200'; textColor = 'text-green-700 font-bold'; }
-                                        else { bgColor = 'bg-red-50 border-red-200'; textColor = 'text-red-600 font-bold'; }
+                                        if (res.label === correctAns) { bgColor = 'bg-green-900/30 border-green-800'; textColor = 'text-green-400 font-bold'; }
+                                        else { bgColor = 'bg-red-900/30 border-red-800'; textColor = 'text-red-400 font-bold'; }
                                     }
                                     return (
                                         <div key={idx} className={`flex items-center justify-between text-sm p-2 rounded border ${bgColor}`}>
                                             <span className="font-mono text-slate-500 text-xs">Q{res.qNum}</span>
                                             <div className="flex items-center gap-2">
-                                                {correctAns && res.label !== correctAns && <span className="text-xs text-slate-400 line-through mr-1">{correctAns}</span>}
+                                                {correctAns && res.label !== correctAns && <span className="text-xs text-slate-500 line-through mr-1">{correctAns}</span>}
                                                 <span className={`font-bold ${textColor}`}>{res.label || '-'}</span>
                                             </div>
                                         </div>
