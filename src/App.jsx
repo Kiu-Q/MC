@@ -7,6 +7,9 @@ const App = () => {
     const [pages, setPages] = useState([]); // Array of { id, imageUrl, width, height, results, regions }
     const [currentPageIndex, setCurrentPageIndex] = useState(0);
 
+    // New state for manual page input
+    const [pageInput, setPageInput] = useState("1");
+
     const [scale, setScale] = useState(1);
     const [selectedRegionId, setSelectedRegionId] = useState(null);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -32,6 +35,11 @@ const App = () => {
     const currentPage = pages[currentPageIndex];
     // Helper to get regions for rendering (default to empty if no page loaded)
     const currentRegions = currentPage?.regions || [];
+
+    // Sync input with actual page index whenever navigation happens
+    useEffect(() => {
+        setPageInput(String(currentPageIndex + 1));
+    }, [currentPageIndex]);
 
     // Helper to get mark for a specific question based on sections
     const getQuestionMark = (qNum) => {
@@ -104,6 +112,9 @@ const App = () => {
     // --- Keyboard Shortcuts ---
     useEffect(() => {
         const handleKeyDown = (e) => {
+            // Prevent interference if typing in inputs
+            if (['INPUT', 'TEXTAREA'].includes(document.activeElement.tagName)) return;
+
             if ((e.metaKey || e.ctrlKey) && e.key === 'o') {
                 e.preventDefault();
                 document.getElementById('file-upload-input')?.click();
@@ -207,7 +218,7 @@ const App = () => {
                     const val = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
                     if (val < 200) darkPixels++;
                 }
-                if (darkPixels > searchWidth * 0.5) {
+                if (darkPixels > searchWidth * 0.4) {
                     if (darkPixels > maxDarkness) { maxDarkness = darkPixels; bestY = y; }
                 }
             }
@@ -1087,7 +1098,37 @@ const App = () => {
                         {pages.length > 1 && (
                             <div className="flex items-center bg-[#21262d] rounded-lg p-1 gap-2 ml-4 border border-[#30363d]">
                                 <button onClick={() => { setCurrentPageIndex(p => Math.max(0, p - 1)); setSelectedRegionId(null); }} disabled={currentPageIndex === 0} className="p-1 hover:bg-[#30363d] rounded shadow-sm disabled:opacity-30 text-[#e6edf3] bg-[#21262d]"><ChevronLeft className="w-4 h-4" /></button>
-                                <span className="text-xs font-mono min-w-[60px] text-center text-[#e6edf3]">Page {currentPageIndex + 1} / {pages.length}</span>
+                                <div className="flex items-center gap-1 text-xs font-mono text-[#e6edf3] min-w-[80px] justify-center px-2">
+                                    <span>Page</span>
+                                    <input
+                                        type="text"
+                                        className="w-10 text-center bg-[#0d1117] border border-[#30363d] rounded focus:border-[#58a6ff] outline-none transition-colors text-[#e6edf3] py-0.5"
+                                        value={pageInput}
+                                        onChange={(e) => setPageInput(e.target.value)}
+                                        onKeyDown={(e) => {
+                                            if (e.key === 'Enter') {
+                                                const val = parseInt(pageInput);
+                                                if (!isNaN(val) && val >= 1 && val <= pages.length) {
+                                                    setCurrentPageIndex(val - 1);
+                                                    setSelectedRegionId(null);
+                                                } else {
+                                                    setPageInput(String(currentPageIndex + 1));
+                                                }
+                                                e.currentTarget.blur();
+                                            }
+                                        }}
+                                        onBlur={() => {
+                                            const val = parseInt(pageInput);
+                                            if (!isNaN(val) && val >= 1 && val <= pages.length) {
+                                                setCurrentPageIndex(val - 1);
+                                                setSelectedRegionId(null);
+                                            } else {
+                                                setPageInput(String(currentPageIndex + 1));
+                                            }
+                                        }}
+                                    />
+                                    <span>/ {pages.length}</span>
+                                </div>
                                 <button onClick={() => { setCurrentPageIndex(p => Math.min(pages.length - 1, p + 1)); setSelectedRegionId(null); }} disabled={currentPageIndex === pages.length - 1} className="p-1 hover:bg-[#30363d] rounded shadow-sm disabled:opacity-30 text-[#e6edf3] bg-[#21262d]"><ChevronRight className="w-4 h-4" /></button>
                             </div>
                         )}
