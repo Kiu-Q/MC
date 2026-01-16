@@ -12,6 +12,7 @@ export default defineConfig({
         main: resolve(__dirname, 'index.html'),
         // The new beta entry point
         beta: resolve(__dirname, 'beta/index.html'),
+        test: resolve(__dirname, 'test/index.html'),
       },
     },
   },

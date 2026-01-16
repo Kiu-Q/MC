@@ -8,14 +8,9 @@ import {
 
 // --- External Libraries (Dynamic Load) ---
 
-// PDF.js
 const PDF_LIB_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const PDF_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-
-// SheetJS (XLSX)
 const XLSX_LIB_URL = "https://cdnjs.cloudflare.com/ajax/libs/xlsx/0.18.5/xlsx.full.min.js";
-
-// Tesseract.js (OCR for Alignment)
 const TESSERACT_LIB_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
 
 const loadPdfLib = async () => {
@@ -54,11 +49,8 @@ const loadTesseractLib = async () => {
     });
 };
 
-// Teachable Machine Loaders
 const loadTeachableMachineLibs = async () => {
     if (window.tmImage) return window.tmImage;
-
-    // 1. Load Tensorflow.js
     await new Promise((resolve, reject) => {
         if (window.tf) { resolve(); return; }
         const script = document.createElement('script');
@@ -67,8 +59,6 @@ const loadTeachableMachineLibs = async () => {
         script.onerror = reject;
         document.body.appendChild(script);
     });
-
-    // 2. Load Teachable Machine Image
     return new Promise((resolve, reject) => {
         const script = document.createElement('script');
         script.src = "https://cdn.jsdelivr.net/npm/@teachablemachine/image@latest/dist/teachablemachine-image.min.js";
@@ -80,7 +70,7 @@ const loadTeachableMachineLibs = async () => {
 
 const App = () => {
     // --- State ---
-    const [pages, setPages] = useState([]); // { id, imageUrl, width, height, results, regions, originalName }
+    const [pages, setPages] = useState([]); 
     const [currentPageIndex, setCurrentPageIndex] = useState(0);
     const [pageInput, setPageInput] = useState("1");
     const [scale, setScale] = useState(1);
@@ -96,19 +86,17 @@ const App = () => {
     const [isMarksSettingsOpen, setIsMarksSettingsOpen] = useState(false);
     const [marksConfig, setMarksConfig] = useState([{ start: 1, end: 100, marks: 1 }]);
     
-    // AI Model State
+    // AI & Batch State
     const [tmModel, setTmModel] = useState(null);
-    
-    // Batch Wizard State
     const [isBatchMode, setIsBatchMode] = useState(false);
-    const [batchStep, setBatchStep] = useState(0); // 0: Upload, 1: Template
+    const [batchStep, setBatchStep] = useState(0); 
     const [batchPdfFiles, setBatchPdfFiles] = useState([]);
     const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
     const [previewPdfPage, setPreviewPdfPage] = useState(1);
     const [previewTotalPages, setPreviewTotalPages] = useState(1);
     const [templateRegions, setTemplateRegions] = useState([]);
     const [isPdfLoading, setIsPdfLoading] = useState(false);
-    const [autoAlign, setAutoAlign] = useState(true); // Default true per request
+    const [autoAlign, setAutoAlign] = useState(true); 
     const [anchorWord, setAnchorWord] = useState("Name");
     const [pagesPerExam, setPagesPerExam] = useState(1);
 
@@ -121,32 +109,17 @@ const App = () => {
     useEffect(() => {
         const handleKeyDown = (e) => {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
-
             switch(e.key) {
                 case 'Delete':
                 case 'Backspace':
-                    if (selectedRegionId && !isBatchMode) {
-                        deleteSelectedRegion();
-                    }
+                    if (selectedRegionId && !isBatchMode) deleteSelectedRegion();
                     break;
-                case 'ArrowLeft':
-                    handlePageNavigation('prev');
-                    break;
-                case 'ArrowRight':
-                    handlePageNavigation('next');
-                    break;
-                case '=':
-                case '+':
-                    setScale(s => Math.min(3, s + 0.1));
-                    break;
-                case '-':
-                    setScale(s => Math.max(0.5, s - 0.1));
-                    break;
-                default:
-                    break;
+                case 'ArrowLeft': handlePageNavigation('prev'); break;
+                case 'ArrowRight': handlePageNavigation('next'); break;
+                case '=': case '+': setScale(s => Math.min(3, s + 0.1)); break;
+                case '-': setScale(s => Math.max(0.5, s - 0.1)); break;
             }
         };
-
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [selectedRegionId, currentPageIndex, pages, isBatchMode]);
@@ -167,19 +140,14 @@ const App = () => {
     }, [pages, currentPageIndex, scale, selectedRegionId, isBatchMode]);
 
     useEffect(() => {
-        if (isBatchMode && batchStep === 1) {
-            drawTemplateCanvas();
-        }
+        if (isBatchMode && batchStep === 1) drawTemplateCanvas();
     }, [batchStep, templateRegions, scale, previewPdfPage, isBatchMode]);
 
-    // --- Special Answer Key Logic ---
     useEffect(() => {
         const rawText = answerKeyInput.toUpperCase();
         const tokens = rawText.split(/\s+/);
-        
         const keyMap = {};
         let currentIndex = 1;
-
         tokens.forEach(token => {
             if (!/[E-Z]/.test(token)) {
                 const matches = token.match(/[A-D]/g);
@@ -191,7 +159,6 @@ const App = () => {
                 }
             }
         });
-
         setParsedAnswerKey(keyMap);
     }, [answerKeyInput]);
 
@@ -208,7 +175,6 @@ const App = () => {
         const newPages = [...pages];
         const page = newPages[currentPageIndex];
         page.regions = page.regions.filter(r => r.id !== selectedRegionId);
-        // Renumber
         page.regions.forEach((r, idx) => r.label = `Q${idx + 1}`);
         setPages(newPages);
         setSelectedRegionId(null);
@@ -218,49 +184,39 @@ const App = () => {
         let score = 0;
         let total = 0;
         if (!page.results || !parsedAnswerKey) return { score: 0, total: 0 };
-        
         Object.entries(page.results).forEach(([qLabel, res]) => {
             const qNum = parseInt(qLabel.replace(/\D/g, '')) || 0;
             if (qNum === 0) return;
-
             const config = marksConfig.find(c => qNum >= c.start && qNum <= c.end);
             const weight = config ? (parseFloat(config.marks) || 0) : 1;
-            
             const correctAns = parsedAnswerKey[qNum.toString()];
-            
             if (correctAns) {
                 total += weight;
-                if (res.label === correctAns) {
-                    score += weight;
-                }
+                if (res.label === correctAns) score += weight;
             }
         });
         return { score, total };
     };
 
-    // --- PDF Logic (Updated) ---
+    // --- PDF Logic ---
     const handleFileSelect = async (e) => {
         const files = Array.from(e.target.files).filter(f => f.type === 'application/pdf');
         if (files.length === 0) {
             showToast("No PDF files selected", "error");
             return;
         }
-
         setIsPdfLoading(true);
         try {
             const pdfjs = await loadPdfLib();
-            
-            // Use the first file to set up the template
             const firstFile = files[0];
             const arrayBuffer = await firstFile.arrayBuffer();
             const pdfDoc = await pdfjs.getDocument(arrayBuffer).promise;
-
             setBatchPdfFiles(files);
             setPreviewPdfDoc(pdfDoc);
             setPreviewTotalPages(pdfDoc.numPages);
             setPreviewPdfPage(1);
             setTemplateRegions([]);
-            setBatchStep(1); // Go to Template Step
+            setBatchStep(1); 
             setIsBatchMode(true);
         } catch (err) {
             console.error(err);
@@ -277,7 +233,6 @@ const App = () => {
         const context = canvas.getContext('2d');
         canvas.height = viewport.height;
         canvas.width = viewport.width;
-
         await page.render({ canvasContext: context, viewport: viewport }).promise;
         return {
             dataUrl: canvas.toDataURL('image/jpeg', 0.8),
@@ -286,14 +241,12 @@ const App = () => {
         };
     };
 
-    // --- Auto OCR Alignment Helper ---
+    // --- Alignment & Extraction ---
     const findUniqueAnchor = async (worker, canvas) => {
         const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
         const { data: { words } } = await worker.recognize(dataUrl);
-        
         const wordCounts = {};
         const wordPositions = {};
-
         words.forEach(w => {
             const text = w.text.trim();
             if (text.length > 3 && /^[a-zA-Z]+$/.test(text) && w.confidence > 80) {
@@ -304,33 +257,24 @@ const App = () => {
                 wordCounts[text]++;
             }
         });
-
         const candidates = Object.keys(wordCounts).filter(word => wordCounts[word] === 1);
         if (candidates.length === 0) return null;
-
-        // Prefer top-left
         candidates.sort((a, b) => {
             const posA = wordPositions[a];
             const posB = wordPositions[b];
             return (posA.y - posB.y) || (posA.x - posB.x);
         });
-
         const bestWord = candidates[0];
         return { word: bestWord, pos: wordPositions[bestWord] };
     };
 
     const findWordPosition = async (worker, canvas, wordToFind) => {
         if (!wordToFind) return null;
-        
         const dataUrl = canvas.toDataURL('image/jpeg', 0.7); 
         const { data: { words } } = await worker.recognize(dataUrl);
-        
         const target = wordToFind.toLowerCase();
         const match = words.find(w => w.text.toLowerCase().trim() === target);
-        
-        if (match) {
-            return { x: match.bbox.x0, y: match.bbox.y0 };
-        }
+        if (match) return { x: match.bbox.x0, y: match.bbox.y0 };
         return null;
     };
 
@@ -339,77 +283,57 @@ const App = () => {
             showToast("Please define at least one answer box.", "error");
             return;
         }
-
         setIsProcessing(true);
         setIsBatchMode(false);
         const newPages = [];
         const pdfjs = await loadPdfLib();
-
         let tesseractWorker = null;
 
         try {
             let anchorData = null; 
-
-            // Initialize Alignment (Built-in, no toggle needed)
-            setProgress({ current: 0, total: 0, status: "Initializing Auto-Alignment..." });
-            await loadTesseractLib();
-            tesseractWorker = await window.Tesseract.createWorker('eng');
-            
-            // 1. Analyze Template
-            setProgress({ current: 0, total: 0, status: "Scanning template for anchor..." });
-            const page = await previewPdfDoc.getPage(previewPdfPage);
-            const viewport = page.getViewport({ scale: 2.0 });
-            const canvas = document.createElement('canvas');
-            canvas.width = viewport.width;
-            canvas.height = viewport.height;
-            const ctx = canvas.getContext('2d');
-            await page.render({ canvasContext: ctx, viewport }).promise;
-            
-            anchorData = await findUniqueAnchor(tesseractWorker, canvas);
-            
-            if (!anchorData) {
-                console.warn("Could not find a unique anchor word. Alignment disabled.");
-            } else {
-                console.log(`Auto-Alignment Anchor: "${anchorData.word}" at`, anchorData.pos);
+            if (autoAlign) {
+                setProgress({ current: 0, total: 0, status: "Initializing Auto-Alignment..." });
+                await loadTesseractLib();
+                tesseractWorker = await window.Tesseract.createWorker('eng');
+                
+                setProgress({ current: 0, total: 0, status: "Scanning template for anchor..." });
+                const page = await previewPdfDoc.getPage(previewPdfPage);
+                const viewport = page.getViewport({ scale: 2.0 });
+                const canvas = document.createElement('canvas');
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                const ctx = canvas.getContext('2d');
+                await page.render({ canvasContext: ctx, viewport }).promise;
+                anchorData = await findUniqueAnchor(tesseractWorker, canvas);
+                if (anchorData) {
+                    console.log(`Auto-Alignment Anchor: "${anchorData.word}" at`, anchorData.pos);
+                } else {
+                    console.warn("No unique anchor found.");
+                }
             }
 
-            // 2. Determine Tasks (Single-File vs Multi-File)
             let tasks = [];
-            
             if (batchPdfFiles.length === 1 && pagesPerExam > 0) {
-                // Single File Mode: Iterate pages
                 const file = batchPdfFiles[0];
                 const arrayBuffer = await file.arrayBuffer();
                 const doc = await pdfjs.getDocument(arrayBuffer).promise;
-                
                 for (let p = previewPdfPage; p <= doc.numPages; p += pagesPerExam) {
-                    tasks.push({ 
-                        doc, 
-                        pageNum: p, 
-                        originalName: `${file.name} (P${p})` 
-                    });
+                    tasks.push({ doc, pageNum: p, originalName: `${file.name} (P${p})` });
                 }
             } else {
-                // Multiple Files Mode
                 for (let i = 0; i < batchPdfFiles.length; i++) {
                     const file = batchPdfFiles[i];
                     const arrayBuffer = await file.arrayBuffer();
                     const doc = await pdfjs.getDocument(arrayBuffer).promise;
                     if (doc.numPages >= previewPdfPage) {
-                        tasks.push({
-                            doc,
-                            pageNum: previewPdfPage,
-                            originalName: file.name
-                        });
+                        tasks.push({ doc, pageNum: previewPdfPage, originalName: file.name });
                     }
                 }
             }
 
-            // 3. Process Tasks
             for (let i = 0; i < tasks.length; i++) {
                 const task = tasks[i];
                 setProgress({ current: i + 1, total: tasks.length, status: `Extracting ${task.originalName}...` });
-
                 const page = await task.doc.getPage(task.pageNum);
                 const viewport = page.getViewport({ scale: 2.0 });
                 const canvas = document.createElement('canvas');
@@ -418,27 +342,23 @@ const App = () => {
                 const ctx = canvas.getContext('2d');
                 await page.render({ canvasContext: ctx, viewport }).promise;
 
-                // 3a. Calculate Offset
                 let offsetX = 0;
                 let offsetY = 0;
-                
                 if (anchorData && tesseractWorker) {
                     const targetPos = await findWordPosition(tesseractWorker, canvas, anchorData.word);
                     if (targetPos) {
                         offsetX = targetPos.x - anchorData.pos.x;
                         offsetY = targetPos.y - anchorData.pos.y;
-                        
                         if (Math.abs(offsetX) > canvas.width * 0.2 || Math.abs(offsetY) > canvas.height * 0.2) {
                             offsetX = 0; offsetY = 0;
                         }
                     }
                 }
 
-                // 4. Adjust Regions (Direct Offset Application requested)
                 const adjustedRegions = templateRegions.map(r => ({
                     ...r,
-                    x: r.x + offsetX,
-                    y: r.y + offsetY
+                    x: (r.x * 2.0 + offsetX) / 2.0, 
+                    y: (r.y * 2.0 + offsetY) / 2.0
                 }));
 
                 newPages.push({
@@ -451,9 +371,7 @@ const App = () => {
                     results: {}
                 });
             }
-            
             if (tesseractWorker) await tesseractWorker.terminate();
-
             setPages(newPages); 
             setCurrentPageIndex(0);
             showToast(`Imported ${newPages.length} pages`, "success");
@@ -461,7 +379,6 @@ const App = () => {
             console.error(e);
             showToast("Error extracting: " + e.message, "error");
         } finally {
-            if (tesseractWorker) try { await tesseractWorker.terminate(); } catch(e){}
             setIsProcessing(false);
             setProgress({ current: 0, total: 0, status: '' });
         }
@@ -470,10 +387,7 @@ const App = () => {
     // --- Drawing Logic ---
     const getMousePos = (e, canvas) => {
         const rect = canvas.getBoundingClientRect();
-        return {
-            x: (e.clientX - rect.left) / scale,
-            y: (e.clientY - rect.top) / scale
-        };
+        return { x: (e.clientX - rect.left) / scale, y: (e.clientY - rect.top) / scale };
     };
 
     const handleCanvasMouseDown = (e, isTemplate = false) => {
@@ -484,18 +398,13 @@ const App = () => {
             updatedPages[currentPageIndex].regions = newRegs;
             setPages(updatedPages);
         };
-        
         if (!canvas || !currentRegions) return;
-
         const pos = getMousePos(e, canvas);
-
         const clickedIndex = currentRegions.findIndex(r => 
-            pos.x >= r.x && pos.x <= r.x + r.width &&
-            pos.y >= r.y && pos.y <= r.y + r.height
+            pos.x >= r.x && pos.x <= r.x + r.width && pos.y >= r.y && pos.y <= r.y + r.height
         );
-
         if (clickedIndex >= 0) {
-            if (e.button === 2 || e.shiftKey) { // Right click delete
+            if (e.button === 2 || e.shiftKey) { 
                 const newRegions = [...currentRegions];
                 newRegions.splice(clickedIndex, 1);
                 newRegions.forEach((r, idx) => r.label = `Q${idx + 1}`);
@@ -503,29 +412,20 @@ const App = () => {
                 if (!isTemplate) setSelectedRegionId(null);
                 return;
             } 
-            
-            if (!isTemplate) {
-                setSelectedRegionId(currentRegions[clickedIndex].id);
-                return;
-            }
+            if (!isTemplate) { setSelectedRegionId(currentRegions[clickedIndex].id); return; }
         }
-
         if (!isTemplate) setSelectedRegionId(null);
-
         const startX = pos.x;
         const startY = pos.y;
-        
         const onMove = (moveEvent) => {
             const movePos = getMousePos(moveEvent, canvas);
             if (isTemplate) drawTemplateCanvas({ x: startX, y: startY, w: movePos.x - startX, h: movePos.y - startY });
             else drawImageAndRegions({ x: startX, y: startY, w: movePos.x - startX, h: movePos.y - startY });
         };
-
         const onUp = (upEvent) => {
             const upPos = getMousePos(upEvent, canvas);
             const w = upPos.x - startX;
             const h = upPos.y - startY;
-
             if (Math.abs(w) > 5 && Math.abs(h) > 5) {
                 const newRegion = {
                     id: Date.now().toString(),
@@ -537,14 +437,11 @@ const App = () => {
                 };
                 setReg([...currentRegions, newRegion]);
             }
-            
             if (isTemplate) drawTemplateCanvas();
             else drawImageAndRegions();
-
             canvas.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
         };
-
         canvas.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
     };
@@ -554,22 +451,13 @@ const App = () => {
         const ctx = canvas.getContext('2d');
         const img = new Image();
         img.src = imageSource;
-        
         try {
-            await new Promise((resolve, reject) => {
-                img.onload = resolve;
-                img.onerror = () => reject(new Error("Image load failed"));
-            });
-        } catch (err) {
-            console.error(err);
-            return;
-        }
-
+            await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = () => reject(); });
+        } catch (err) { return; }
         canvas.width = img.width * scale;
         canvas.height = img.height * scale;
         ctx.scale(scale, scale);
         ctx.drawImage(img, 0, 0, img.width, img.height);
-
         regions.forEach(r => {
             const isSelected = !isTemplate && r.id === selectedRegionId;
             ctx.strokeStyle = isSelected ? '#58a6ff' : '#238636';
@@ -577,7 +465,6 @@ const App = () => {
             ctx.fillStyle = isSelected ? 'rgba(88, 166, 255, 0.2)' : 'rgba(35, 134, 54, 0.1)';
             ctx.fillRect(r.x, r.y, r.width, r.height);
             ctx.strokeRect(r.x, r.y, r.width, r.height);
-
             ctx.fillStyle = isSelected ? '#58a6ff' : '#238636';
             const labelW = ctx.measureText(r.label).width + 8;
             ctx.fillRect(r.x, r.y - 18, labelW, 18);
@@ -586,7 +473,6 @@ const App = () => {
             ctx.textBaseline = 'middle';
             ctx.fillText(r.label, r.x + 4, r.y - 9);
         });
-
         if (ghostRect) {
             ctx.strokeStyle = '#d29922';
             ctx.lineWidth = 2;
@@ -657,11 +543,29 @@ const App = () => {
 
                 for (const region of page.regions) {
                     setProgress({ current: processedCount, total: totalRegions, status: `Scanning Page ${i+1}: ${region.label}...` });
+                    
+                    // Create SQUARE crop for AI (Fix: Not cropping, but padding)
+                    // The detected region is w x h. We need a square S x S where S = max(w, h).
+                    // We draw the region centered on the S x S canvas with white background.
+                    
+                    const maxDim = Math.max(region.width, region.height);
+                    
+                    // Create crop canvas
                     const cCanvas = document.createElement('canvas');
-                    cCanvas.width = region.width;
-                    cCanvas.height = region.height;
+                    cCanvas.width = maxDim;
+                    cCanvas.height = maxDim;
                     const ctx = cCanvas.getContext('2d');
-                    ctx.drawImage(img, region.x, region.y, region.width, region.height, 0, 0, region.width, region.height);
+                    
+                    // Fill white background
+                    ctx.fillStyle = "#FFFFFF";
+                    ctx.fillRect(0, 0, maxDim, maxDim);
+                    
+                    // Calculate center position
+                    const dx = (maxDim - region.width) / 2;
+                    const dy = (maxDim - region.height) / 2;
+                    
+                    // Draw original image region onto center of square canvas
+                    ctx.drawImage(img, region.x, region.y, region.width, region.height, dx, dy, region.width, region.height);
                     
                     const predictions = await model.predict(cCanvas);
                     const best = predictions.reduce((prev, current) => (prev.probability > current.probability) ? prev : current);
@@ -787,7 +691,7 @@ const App = () => {
                                 <div className={`absolute top-4 right-4 flex gap-1 ${theme.sidebar} p-1 rounded border ${theme.border} z-20 shadow-lg`}>
                                     <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} className={`p-1.5 ${theme.buttonHover} rounded ${theme.text}`}><ZoomOut size={16}/></button>
                                     <span className={`text-xs font-mono flex items-center px-2 ${theme.textMuted}`}>{Math.round(scale * 100)}%</span>
-                                    <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className={`p-1.5 ${theme.buttonHover} rounded ${theme.text}`}><ZoomIn size={16}/></button>
+                                    <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className={`p-1.5 ${theme.buttonHover} rounded ${theme.text}`}><ZoomIn size={18}/></button>
                                 </div>
                                 <div className={`relative shadow-2xl border ${theme.border}`}>
                                     <canvas ref={templateCanvasRef} onMouseDown={(e) => handleCanvasMouseDown(e, true)} className="cursor-crosshair block"/>
@@ -839,7 +743,7 @@ const App = () => {
                         <span className={`text-xs font-mono w-10 text-center ${theme.textMuted}`}>{Math.round(scale * 100)}%</span>
                         <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className={`p-1.5 ${theme.buttonHover} rounded text-[#7d8590] hover:text-[#c9d1d9]`}><ZoomIn size={18}/></button>
                         <div className={`h-6 w-px bg-[#30363d] mx-2`}></div>
-                        <a href="https://github.com/Kiu-Q/MC" target="_blank" rel="noreferrer" className={`p-1.5 ${theme.textMuted} hover:${theme.text} ${theme.buttonHover} rounded-md`}><HelpCircle size={18}/></a>
+                        <a href="https://github.com/kiuq/handwritten-mc-scanner/blob/main/README.md" target="_blank" rel="noreferrer" className={`p-1.5 ${theme.textMuted} hover:${theme.text} ${theme.buttonHover} rounded-md`}><HelpCircle size={18}/></a>
                         <button onClick={() => setIsMarksSettingsOpen(true)} className={`p-1.5 ${theme.textMuted} hover:${theme.text} ${theme.buttonHover} rounded-md`} title="Weighting"><Hash size={18}/></button>
                         <button onClick={handleExportExcel} className={`p-1.5 ${theme.success} ${theme.buttonHover} rounded-md`} title="Export"><Download size={18}/></button>
                         <button onClick={() => setShowResultsSidebar(!showResultsSidebar)} className={`p-1.5 ${theme.accent} ${theme.buttonHover} rounded-md`}><LayoutTemplate size={18}/></button>
