@@ -639,7 +639,7 @@ const App = () => {
             if (!model) {
                 setProgress({ current: 0, total: 0, status: "Loading AI Model..." });
                 await loadTeachableMachineLibs();
-                const URL = "https://teachablemachine.withgoogle.com/models/S9aLzoggs/";
+                const URL = "https://teachablemachine.withgoogle.com/models/YDV-9wqBW/";
                 model = await window.tmImage.load(URL + "model.json", URL + "metadata.json");
                 setTmModel(model);
             }
