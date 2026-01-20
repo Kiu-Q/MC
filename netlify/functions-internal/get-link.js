@@ -17,9 +17,8 @@ export async function handler(event) {
     // GET: Retrieve all scans for download
     if (event.httpMethod === 'GET') {
       const rows = await sql`
-        SELECT filename, image_data 
-        FROM scans 
-        ORDER BY created_at DESC 
+        SELECT link 
+        FROM link
       `;
 
       return {
@@ -28,19 +27,6 @@ export async function handler(event) {
         body: JSON.stringify(rows),
       };
     }
-
-    // DELETE: Clear the scans table
-    if (event.httpMethod === 'DELETE') {
-      await sql`DELETE FROM scans`;
-
-      return {
-        statusCode: 200,
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: "Database cleared successfully" }),
-      };
-    }
-
-    return { statusCode: 405, body: 'Method Not Allowed' };
 
   } catch (err) {
     console.error("Database Error:", err);

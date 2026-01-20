@@ -1,8 +1,8 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { 
-    FileSpreadsheet, Trash2, CheckCircle2, 
-    ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut, 
-    LayoutTemplate, ChevronLeft, ScanLine, GraduationCap, Hash, 
+import {
+    FileSpreadsheet, Trash2, CheckCircle2,
+    ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut,
+    LayoutTemplate, ChevronLeft, ScanLine, GraduationCap, Hash,
     X, Loader2, FolderInput, Files, BrainCircuit, Anchor, Search, FileText, HelpCircle
 } from 'lucide-react';
 
@@ -95,10 +95,10 @@ const App = () => {
     const [parsedAnswerKey, setParsedAnswerKey] = useState({});
     const [isMarksSettingsOpen, setIsMarksSettingsOpen] = useState(false);
     const [marksConfig, setMarksConfig] = useState([{ start: 1, end: 100, marks: 1 }]);
-    
+
     // AI Model State
     const [tmModel, setTmModel] = useState(null);
-    
+
     // Batch Wizard State
     const [isBatchMode, setIsBatchMode] = useState(false);
     const [batchStep, setBatchStep] = useState(0); // 0: Upload, 1: Template
@@ -122,7 +122,7 @@ const App = () => {
         const handleKeyDown = (e) => {
             if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
 
-            switch(e.key) {
+            switch (e.key) {
                 case 'Delete':
                 case 'Backspace':
                     if (selectedRegionId && !isBatchMode) {
@@ -176,7 +176,7 @@ const App = () => {
     useEffect(() => {
         const rawText = answerKeyInput.toUpperCase();
         const tokens = rawText.split(/\s+/);
-        
+
         const keyMap = {};
         let currentIndex = 1;
 
@@ -218,16 +218,16 @@ const App = () => {
         let score = 0;
         let total = 0;
         if (!page.results || !parsedAnswerKey) return { score: 0, total: 0 };
-        
+
         Object.entries(page.results).forEach(([qLabel, res]) => {
             const qNum = parseInt(qLabel.replace(/\D/g, '')) || 0;
             if (qNum === 0) return;
 
             const config = marksConfig.find(c => qNum >= c.start && qNum <= c.end);
             const weight = config ? (parseFloat(config.marks) || 0) : 1;
-            
+
             const correctAns = parsedAnswerKey[qNum.toString()];
-            
+
             if (correctAns) {
                 total += weight;
                 if (res.label === correctAns) {
@@ -249,7 +249,7 @@ const App = () => {
         setIsPdfLoading(true);
         try {
             const pdfjs = await loadPdfLib();
-            
+
             // Use the first file to set up the template
             const firstFile = files[0];
             const arrayBuffer = await firstFile.arrayBuffer();
@@ -290,7 +290,7 @@ const App = () => {
     const findUniqueAnchor = async (worker, canvas) => {
         const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
         const { data: { words } } = await worker.recognize(dataUrl);
-        
+
         const wordCounts = {};
         const wordPositions = {};
 
@@ -321,13 +321,13 @@ const App = () => {
 
     const findWordPosition = async (worker, canvas, wordToFind) => {
         if (!wordToFind) return null;
-        
-        const dataUrl = canvas.toDataURL('image/jpeg', 0.7); 
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
         const { data: { words } } = await worker.recognize(dataUrl);
-        
+
         const target = wordToFind.toLowerCase();
         const match = words.find(w => w.text.toLowerCase().trim() === target);
-        
+
         if (match) {
             return { x: match.bbox.x0, y: match.bbox.y0 };
         }
@@ -348,13 +348,13 @@ const App = () => {
         let tesseractWorker = null;
 
         try {
-            let anchorData = null; 
+            let anchorData = null;
 
             // Initialize Alignment (Built-in, no toggle needed)
             setProgress({ current: 0, total: 0, status: "Initializing Auto-Alignment..." });
             await loadTesseractLib();
             tesseractWorker = await window.Tesseract.createWorker('eng');
-            
+
             // 1. Analyze Template
             setProgress({ current: 0, total: 0, status: "Scanning template for anchor..." });
             const page = await previewPdfDoc.getPage(previewPdfPage);
@@ -364,9 +364,9 @@ const App = () => {
             canvas.height = viewport.height;
             const ctx = canvas.getContext('2d');
             await page.render({ canvasContext: ctx, viewport }).promise;
-            
+
             anchorData = await findUniqueAnchor(tesseractWorker, canvas);
-            
+
             if (!anchorData) {
                 console.warn("Could not find a unique anchor word. Alignment disabled.");
             } else {
@@ -375,18 +375,18 @@ const App = () => {
 
             // 2. Determine Tasks (Single-File vs Multi-File)
             let tasks = [];
-            
+
             if (batchPdfFiles.length === 1 && pagesPerExam > 0) {
                 // Single File Mode: Iterate pages
                 const file = batchPdfFiles[0];
                 const arrayBuffer = await file.arrayBuffer();
                 const doc = await pdfjs.getDocument(arrayBuffer).promise;
-                
+
                 for (let p = previewPdfPage; p <= doc.numPages; p += pagesPerExam) {
-                    tasks.push({ 
-                        doc, 
-                        pageNum: p, 
-                        originalName: `${file.name} (P${p})` 
+                    tasks.push({
+                        doc,
+                        pageNum: p,
+                        originalName: `${file.name} (P${p})`
                     });
                 }
             } else {
@@ -421,13 +421,13 @@ const App = () => {
                 // 3a. Calculate Offset
                 let offsetX = 0;
                 let offsetY = 0;
-                
+
                 if (anchorData && tesseractWorker) {
                     const targetPos = await findWordPosition(tesseractWorker, canvas, anchorData.word);
                     if (targetPos) {
                         offsetX = targetPos.x - anchorData.pos.x;
                         offsetY = targetPos.y - anchorData.pos.y;
-                        
+
                         if (Math.abs(offsetX) > canvas.width * 0.2 || Math.abs(offsetY) > canvas.height * 0.2) {
                             offsetX = 0; offsetY = 0;
                         }
@@ -451,17 +451,17 @@ const App = () => {
                     results: {}
                 });
             }
-            
+
             if (tesseractWorker) await tesseractWorker.terminate();
 
-            setPages(newPages); 
+            setPages(newPages);
             setCurrentPageIndex(0);
             showToast(`Imported ${newPages.length} pages`, "success");
         } catch (e) {
             console.error(e);
             showToast("Error extracting: " + e.message, "error");
         } finally {
-            if (tesseractWorker) try { await tesseractWorker.terminate(); } catch(e){}
+            if (tesseractWorker) try { await tesseractWorker.terminate(); } catch (e) { }
             setIsProcessing(false);
             setProgress({ current: 0, total: 0, status: '' });
         }
@@ -484,12 +484,12 @@ const App = () => {
             updatedPages[currentPageIndex].regions = newRegs;
             setPages(updatedPages);
         };
-        
+
         if (!canvas || !currentRegions) return;
 
         const pos = getMousePos(e, canvas);
 
-        const clickedIndex = currentRegions.findIndex(r => 
+        const clickedIndex = currentRegions.findIndex(r =>
             pos.x >= r.x && pos.x <= r.x + r.width &&
             pos.y >= r.y && pos.y <= r.y + r.height
         );
@@ -502,8 +502,8 @@ const App = () => {
                 setReg(newRegions);
                 if (!isTemplate) setSelectedRegionId(null);
                 return;
-            } 
-            
+            }
+
             if (!isTemplate) {
                 setSelectedRegionId(currentRegions[clickedIndex].id);
                 return;
@@ -514,7 +514,7 @@ const App = () => {
 
         const startX = pos.x;
         const startY = pos.y;
-        
+
         const onMove = (moveEvent) => {
             const movePos = getMousePos(moveEvent, canvas);
             if (isTemplate) drawTemplateCanvas({ x: startX, y: startY, w: movePos.x - startX, h: movePos.y - startY });
@@ -537,7 +537,7 @@ const App = () => {
                 };
                 setReg([...currentRegions, newRegion]);
             }
-            
+
             if (isTemplate) drawTemplateCanvas();
             else drawImageAndRegions();
 
@@ -554,7 +554,7 @@ const App = () => {
         const ctx = canvas.getContext('2d');
         const img = new Image();
         img.src = imageSource;
-        
+
         try {
             await new Promise((resolve, reject) => {
                 img.onload = resolve;
@@ -612,7 +612,7 @@ const App = () => {
         const timestamp = new Date().toISOString();
         const filename = `${timestamp.replace(/[:.]/g, '-')}_${label}_${confidence.toFixed(2)}`;
         const base64 = canvas.toDataURL('image/jpeg', 0.8);
-        const FUNCTION_ENDPOINT = "/.netlify/functions/add-scan"; 
+        const FUNCTION_ENDPOINT = "/.netlify/functions/add-scan";
 
         try {
             const res = await fetch(FUNCTION_ENDPOINT, {
@@ -639,7 +639,20 @@ const App = () => {
             if (!model) {
                 setProgress({ current: 0, total: 0, status: "Loading AI Model..." });
                 await loadTeachableMachineLibs();
-                const URL = "https://teachablemachine.withgoogle.com/models/YDV-9wqBW/";
+
+                const response = await fetch('/.netlify/functions/get-link');
+                const contentType = response.headers.get("content-type");
+                if (contentType && contentType.includes("text/html")) {
+                    throw new Error("Function not found. Run 'netlify dev' to enable backend.");
+                }
+                if (!response.ok) throw new Error(`Server error: ${response.status}`);
+                const rows = await response.json();
+                if (rows.length === 0) {
+                    showToast("No training data found in database.", "error");
+                    return;
+                }
+                const URL = rows[0].link;
+                
                 model = await window.tmImage.load(URL + "model.json", URL + "metadata.json");
                 setTmModel(model);
             }
@@ -656,18 +669,18 @@ const App = () => {
                 page.results = {};
 
                 for (const region of page.regions) {
-                    setProgress({ current: processedCount, total: totalRegions, status: `Scanning Page ${i+1}: ${region.label}...` });
+                    setProgress({ current: processedCount, total: totalRegions, status: `Scanning Page ${i + 1}: ${region.label}...` });
                     const cCanvas = document.createElement('canvas');
                     cCanvas.width = region.width;
                     cCanvas.height = region.height;
                     const ctx = cCanvas.getContext('2d');
                     ctx.drawImage(img, region.x, region.y, region.width, region.height, 0, 0, region.width, region.height);
-                    
+
                     const predictions = await model.predict(cCanvas);
                     const best = predictions.reduce((prev, current) => (prev.probability > current.probability) ? prev : current);
                     const CONFIDENCE_THRESHOLD = 0.5;
                     const finalLabel = best.probability >= CONFIDENCE_THRESHOLD ? best.className : "EMPTY";
-                    
+
                     // Upload DB
                     uploadScanResult(cCanvas, finalLabel, best.probability);
 
@@ -699,7 +712,7 @@ const App = () => {
             const header = ['Student File', 'Total Score', 'Max Score', 'Percentage', ...sortedLabels];
             const rows = pages.map((page, i) => {
                 const { score, total } = getScore(page);
-                const rowIndex = i + 2; 
+                const rowIndex = i + 2;
                 const row = [page.originalName || `Page ${i + 1}`, score, total, { t: 'n', f: `B${rowIndex}/C${rowIndex}`, z: '0.0%' }];
                 sortedLabels.forEach(label => {
                     const res = page.results?.[label];
@@ -732,19 +745,19 @@ const App = () => {
             <div className={`h-screen w-screen ${theme.bg} ${theme.text} flex flex-col font-sans`}>
                 <style>{`:root, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; max-width: none !important; }`}</style>
                 <div className={`h-16 border-b ${theme.border} ${theme.sidebar} flex items-center justify-between px-6`}>
-                    <h2 className={`font-bold flex items-center gap-2 ${theme.accent}`}><Files size={20}/> Batch PDF Import</h2>
-                    <button onClick={() => setIsBatchMode(false)} className={`p-2 ${theme.buttonHover} rounded-md`}><X size={20}/></button>
+                    <h2 className={`font-bold flex items-center gap-2 ${theme.accent}`}><Files size={20} /> Batch PDF Import</h2>
+                    <button onClick={() => setIsBatchMode(false)} className={`p-2 ${theme.buttonHover} rounded-md`}><X size={20} /></button>
                 </div>
                 <div className="flex-1 overflow-hidden flex">
                     {batchStep === 0 && (
                         <div className="flex-1 flex flex-col items-center justify-center p-10">
                             <div className={`border-2 border-dashed ${theme.border} rounded-xl ${theme.bg} p-12 flex flex-col items-center text-center max-w-lg w-full`}>
-                                <FolderInput size={48} className={`${theme.textMuted} mb-4`}/>
+                                <FolderInput size={48} className={`${theme.textMuted} mb-4`} />
                                 <h3 className="text-xl font-semibold mb-2">Select PDF File(s)</h3>
-                                <p className={`${theme.textMuted} mb-6 text-sm`}>Select one or more PDF files.<br/>(Single file = whole class, Multiple files = one student each)</p>
+                                <p className={`${theme.textMuted} mb-6 text-sm`}>Select one or more PDF files.<br />(Single file = whole class, Multiple files = one student each)</p>
                                 <input type="file" ref={folderInputRef} className="hidden" multiple accept="application/pdf" onChange={handleFileSelect} />
                                 <button onClick={() => folderInputRef.current.click()} disabled={isPdfLoading} className={`px-6 py-3 ${theme.accentBg} hover:opacity-90 text-white rounded-md font-medium flex items-center gap-2`}>
-                                    {isPdfLoading ? <Loader2 className="animate-spin"/> : <FolderInput size={18}/>} Choose Files
+                                    {isPdfLoading ? <Loader2 className="animate-spin" /> : <FolderInput size={18} />} Choose Files
                                 </button>
                             </div>
                         </div>
@@ -756,17 +769,17 @@ const App = () => {
                                 <div className="mb-4">
                                     <label className={`text-xs ${theme.textMuted} uppercase font-bold`}>Page Selection</label>
                                     <div className="flex items-center gap-2 mt-1">
-                                        <button onClick={() => setPreviewPdfPage(p => Math.max(1, p - 1))} className={`p-1 bg-[#21262d] rounded border ${theme.border}`}><ChevronLeft size={16}/></button>
+                                        <button onClick={() => setPreviewPdfPage(p => Math.max(1, p - 1))} className={`p-1 bg-[#21262d] rounded border ${theme.border}`}><ChevronLeft size={16} /></button>
                                         <span className="text-sm font-mono">{previewPdfPage} / {previewTotalPages}</span>
-                                        <button onClick={() => setPreviewPdfPage(p => Math.min(previewTotalPages, p + 1))} className={`p-1 bg-[#21262d] rounded border ${theme.border}`}><ChevronRight size={16}/></button>
+                                        <button onClick={() => setPreviewPdfPage(p => Math.min(previewTotalPages, p + 1))} className={`p-1 bg-[#21262d] rounded border ${theme.border}`}><ChevronRight size={16} /></button>
                                     </div>
                                 </div>
                                 <div className="mb-4 space-y-3">
-                                    <p className={`text-[10px] ${theme.textMuted} flex items-center gap-1`}><Anchor size={12}/> Auto-Align Enabled</p>
+                                    <p className={`text-[10px] ${theme.textMuted} flex items-center gap-1`}><Anchor size={12} /> Auto-Align Enabled</p>
                                     {batchPdfFiles.length === 1 && (
                                         <div>
                                             <label className={`text-xs ${theme.textMuted} uppercase font-bold mb-1 block`}>Pages Per Student</label>
-                                            <input type="number" min="1" value={pagesPerExam} onChange={(e) => setPagesPerExam(parseInt(e.target.value) || 1)} className={`w-full ${theme.inputBg} border ${theme.border} rounded p-2 text-sm text-[#c9d1d9] focus:border-[#58a6ff] outline-none`}/>
+                                            <input type="number" min="1" value={pagesPerExam} onChange={(e) => setPagesPerExam(parseInt(e.target.value) || 1)} className={`w-full ${theme.inputBg} border ${theme.border} rounded p-2 text-sm text-[#c9d1d9] focus:border-[#58a6ff] outline-none`} />
                                             <p className={`text-[10px] ${theme.textMuted} mt-1`}>Use if one file contains multiple exams.</p>
                                         </div>
                                     )}
@@ -776,21 +789,21 @@ const App = () => {
                                         {templateRegions.map((r, i) => (
                                             <div key={i} className={`flex justify-between items-center text-xs p-2 bg-[#21262d] rounded border ${theme.border}`}>
                                                 <span className={`font-mono ${theme.accent}`}>{r.label}</span>
-                                                <button onClick={() => { const n = [...templateRegions]; n.splice(i, 1); setTemplateRegions(n); }} className="text-[#f85149]"><Trash2 size={12}/></button>
+                                                <button onClick={() => { const n = [...templateRegions]; n.splice(i, 1); setTemplateRegions(n); }} className="text-[#f85149]"><Trash2 size={12} /></button>
                                             </div>
                                         ))}
                                     </div>
                                 </div>
-                                <button onClick={handleBatchExtract} className={`w-full py-2 ${theme.accentBg} text-white rounded-md font-medium flex items-center justify-center gap-2`}><CheckCircle2 size={16}/> Apply Template</button>
+                                <button onClick={handleBatchExtract} className={`w-full py-2 ${theme.accentBg} text-white rounded-md font-medium flex items-center justify-center gap-2`}><CheckCircle2 size={16} /> Apply Template</button>
                             </div>
                             <div className={`flex-1 ${theme.bg} overflow-auto flex items-center justify-center p-8 relative`}>
                                 <div className={`absolute top-4 right-4 flex gap-1 ${theme.sidebar} p-1 rounded border ${theme.border} z-20 shadow-lg`}>
-                                    <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} className={`p-1.5 ${theme.buttonHover} rounded ${theme.text}`}><ZoomOut size={16}/></button>
+                                    <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} className={`p-1.5 ${theme.buttonHover} rounded ${theme.text}`}><ZoomOut size={16} /></button>
                                     <span className={`text-xs font-mono flex items-center px-2 ${theme.textMuted}`}>{Math.round(scale * 100)}%</span>
-                                    <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className={`p-1.5 ${theme.buttonHover} rounded ${theme.text}`}><ZoomIn size={16}/></button>
+                                    <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className={`p-1.5 ${theme.buttonHover} rounded ${theme.text}`}><ZoomIn size={16} /></button>
                                 </div>
                                 <div className={`relative shadow-2xl border ${theme.border}`}>
-                                    <canvas ref={templateCanvasRef} onMouseDown={(e) => handleCanvasMouseDown(e, true)} className="cursor-crosshair block"/>
+                                    <canvas ref={templateCanvasRef} onMouseDown={(e) => handleCanvasMouseDown(e, true)} className="cursor-crosshair block" />
                                 </div>
                             </div>
                         </div>
@@ -811,15 +824,15 @@ const App = () => {
                 <div className="flex-1 overflow-y-auto p-2 space-y-2">
                     {pages.map((page, idx) => (
                         <div key={page.id} onClick={() => setCurrentPageIndex(idx)} className={`p-2 rounded-md border cursor-pointer flex items-center gap-3 group transition-all ${currentPageIndex === idx ? `bg-[#21262d] border-[#58a6ff]` : `${theme.bg} ${theme.border}`}`}>
-                            <div className={`w-8 h-8 bg-[#21262d] rounded flex items-center justify-center ${theme.textMuted} overflow-hidden flex-shrink-0`}>{page.imageUrl ? <img src={page.imageUrl} className="w-full h-full object-cover"/> : <FileSpreadsheet size={14}/>}</div>
-                            <div className="flex-1 min-w-0"><div className="text-xs font-medium text-[#e6edf3] truncate">{page.originalName || `Page ${idx+1}`}</div><div className={`flex items-center gap-2 text-[10px] ${theme.textMuted}`}><span>{getScore(page).score}/{getScore(page).total}</span></div></div>
+                            <div className={`w-8 h-8 bg-[#21262d] rounded flex items-center justify-center ${theme.textMuted} overflow-hidden flex-shrink-0`}>{page.imageUrl ? <img src={page.imageUrl} className="w-full h-full object-cover" /> : <FileSpreadsheet size={14} />}</div>
+                            <div className="flex-1 min-w-0"><div className="text-xs font-medium text-[#e6edf3] truncate">{page.originalName || `Page ${idx + 1}`}</div><div className={`flex items-center gap-2 text-[10px] ${theme.textMuted}`}><span>{getScore(page).score}/{getScore(page).total}</span></div></div>
                         </div>
                     ))}
                 </div>
                 {pages.length > 0 && (
                     <div className={`p-3 border-t ${theme.border}`}>
                         <button onClick={handleBatchScan} disabled={isProcessing} className="w-full py-2 bg-[#238636] hover:bg-[#2ea043] disabled:opacity-50 text-white rounded-md font-medium flex items-center justify-center gap-2 text-sm">
-                            {isProcessing ? <Loader2 className="animate-spin w-4 h-4"/> : <><BrainCircuit size={16}/> Scan All (AI)</>}
+                            {isProcessing ? <Loader2 className="animate-spin w-4 h-4" /> : <><BrainCircuit size={16} /> Scan All (AI)</>}
                         </button>
                     </div>
                 )}
@@ -828,35 +841,35 @@ const App = () => {
                 <div className={`h-12 border-b ${theme.border} ${theme.sidebar} flex items-center justify-between px-4`}>
                     <div className="flex items-center gap-2">
                         <div className={`flex items-center gap-1 bg-[#21262d] rounded p-0.5 border ${theme.border}`}>
-                             <button onClick={() => handlePageNavigation('prev')} className={`p-1 ${theme.buttonHover} rounded ${theme.text}`}><ChevronLeft size={14}/></button>
-                             <input className={`w-8 bg-transparent text-center text-xs font-mono focus:outline-none ${theme.text}`} value={pageInput} onChange={(e) => { setPageInput(e.target.value); const val = parseInt(e.target.value); if(val > 0 && val <= pages.length) setCurrentPageIndex(val-1); }}/>
-                             <button onClick={() => handlePageNavigation('next')} className={`p-1 ${theme.buttonHover} rounded ${theme.text}`}><ChevronRight size={14}/></button>
+                            <button onClick={() => handlePageNavigation('prev')} className={`p-1 ${theme.buttonHover} rounded ${theme.text}`}><ChevronLeft size={14} /></button>
+                            <input className={`w-8 bg-transparent text-center text-xs font-mono focus:outline-none ${theme.text}`} value={pageInput} onChange={(e) => { setPageInput(e.target.value); const val = parseInt(e.target.value); if (val > 0 && val <= pages.length) setCurrentPageIndex(val - 1); }} />
+                            <button onClick={() => handlePageNavigation('next')} className={`p-1 ${theme.buttonHover} rounded ${theme.text}`}><ChevronRight size={14} /></button>
                         </div>
                     </div>
                     <div className="flex items-center gap-2">
                         <div className={`h-6 w-px bg-[#30363d] mx-2`}></div>
-                        <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} className={`p-1.5 ${theme.buttonHover} rounded text-[#7d8590] hover:text-[#c9d1d9]`}><ZoomOut size={18}/></button>
+                        <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} className={`p-1.5 ${theme.buttonHover} rounded text-[#7d8590] hover:text-[#c9d1d9]`}><ZoomOut size={18} /></button>
                         <span className={`text-xs font-mono w-10 text-center ${theme.textMuted}`}>{Math.round(scale * 100)}%</span>
-                        <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className={`p-1.5 ${theme.buttonHover} rounded text-[#7d8590] hover:text-[#c9d1d9]`}><ZoomIn size={18}/></button>
+                        <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className={`p-1.5 ${theme.buttonHover} rounded text-[#7d8590] hover:text-[#c9d1d9]`}><ZoomIn size={18} /></button>
                         <div className={`h-6 w-px bg-[#30363d] mx-2`}></div>
-                        <a href="https://github.com/Kiu-Q/MC" target="_blank" rel="noreferrer" className={`p-1.5 ${theme.textMuted} hover:${theme.text} ${theme.buttonHover} rounded-md`}><HelpCircle size={18}/></a>
-                        <button onClick={() => setIsMarksSettingsOpen(true)} className={`p-1.5 ${theme.textMuted} hover:${theme.text} ${theme.buttonHover} rounded-md`} title="Weighting"><Hash size={18}/></button>
-                        <button onClick={handleExportExcel} className={`p-1.5 ${theme.success} ${theme.buttonHover} rounded-md`} title="Export"><Download size={18}/></button>
-                        <button onClick={() => setShowResultsSidebar(!showResultsSidebar)} className={`p-1.5 ${theme.accent} ${theme.buttonHover} rounded-md`}><LayoutTemplate size={18}/></button>
+                        <a href="https://github.com/Kiu-Q/MC" target="_blank" rel="noreferrer" className={`p-1.5 ${theme.textMuted} hover:${theme.text} ${theme.buttonHover} rounded-md`}><HelpCircle size={18} /></a>
+                        <button onClick={() => setIsMarksSettingsOpen(true)} className={`p-1.5 ${theme.textMuted} hover:${theme.text} ${theme.buttonHover} rounded-md`} title="Weighting"><Hash size={18} /></button>
+                        <button onClick={handleExportExcel} className={`p-1.5 ${theme.success} ${theme.buttonHover} rounded-md`} title="Export"><Download size={18} /></button>
+                        <button onClick={() => setShowResultsSidebar(!showResultsSidebar)} className={`p-1.5 ${theme.accent} ${theme.buttonHover} rounded-md`}><LayoutTemplate size={18} /></button>
                     </div>
                 </div>
                 <div className="flex-1 overflow-auto flex items-center justify-center p-8 relative">
                     <div className={`${theme.bg} shadow-2xl relative border ${theme.border}`}>
-                        <canvas ref={canvasRef} onMouseDown={(e) => handleCanvasMouseDown(e, false)} className="cursor-crosshair block"/>
-                         {pages.length === 0 && (
-                            <div className={`absolute inset-0 flex flex-col items-center justify-center ${theme.textMuted} pointer-events-none`}><ScanLine size={48} className="mb-4 opacity-20"/><p>Import Folder to Start</p></div>
+                        <canvas ref={canvasRef} onMouseDown={(e) => handleCanvasMouseDown(e, false)} className="cursor-crosshair block" />
+                        {pages.length === 0 && (
+                            <div className={`absolute inset-0 flex flex-col items-center justify-center ${theme.textMuted} pointer-events-none`}><ScanLine size={48} className="mb-4 opacity-20" /><p>Import Folder to Start</p></div>
                         )}
                     </div>
                 </div>
                 {isProcessing && (
                     <div className={`absolute inset-0 ${theme.bg}/80 z-50 flex items-center justify-center backdrop-blur-sm`}>
                         <div className={`${theme.sidebar} border ${theme.border} p-6 rounded-xl shadow-2xl max-w-sm w-full text-center`}>
-                            <Loader2 size={32} className={`animate-spin ${theme.accent} mx-auto mb-4`}/><h3 className="text-[#e6edf3] font-medium mb-1">{progress.status}</h3><div className={`w-full ${theme.border} h-1.5 rounded-full overflow-hidden mt-3 bg-gray-700`}><div className="h-full bg-[#238636] transition-all duration-300" style={{ width: `${(progress.current/progress.total)*100}%` }}></div></div><p className={`text-xs ${theme.textMuted} mt-2`}>{progress.current} / {progress.total} items</p>
+                            <Loader2 size={32} className={`animate-spin ${theme.accent} mx-auto mb-4`} /><h3 className="text-[#e6edf3] font-medium mb-1">{progress.status}</h3><div className={`w-full ${theme.border} h-1.5 rounded-full overflow-hidden mt-3 bg-gray-700`}><div className="h-full bg-[#238636] transition-all duration-300" style={{ width: `${(progress.current / progress.total) * 100}%` }}></div></div><p className={`text-xs ${theme.textMuted} mt-2`}>{progress.current} / {progress.total} items</p>
                         </div>
                     </div>
                 )}
@@ -864,11 +877,11 @@ const App = () => {
             {showResultsSidebar && (
                 <div className={`w-72 ${theme.sidebar} border-l ${theme.border} flex flex-col flex-shrink-0 z-20`}>
                     <div className={`p-4 border-b ${theme.border}`}>
-                        <h3 className="font-bold text-[#e6edf3] flex items-center gap-2 mb-4"><GraduationCap className="text-[#e3b341]" size={18}/> Grading</h3>
+                        <h3 className="font-bold text-[#e6edf3] flex items-center gap-2 mb-4"><GraduationCap className="text-[#e3b341]" size={18} /> Grading</h3>
                         <div className="space-y-3">
                             <div>
                                 <label className={`text-xs font-bold ${theme.textMuted} uppercase mb-1 block`}>Answer Key</label>
-                                <textarea className={`w-full ${theme.inputBg} border ${theme.border} rounded p-2 text-xs ${theme.text} font-mono h-24 focus:border-[#58a6ff] outline-none resize-none`} placeholder="Paste key (e.g. 1 A 2 B)" value={answerKeyInput} onChange={(e) => setAnswerKeyInput(e.target.value)}/>
+                                <textarea className={`w-full ${theme.inputBg} border ${theme.border} rounded p-2 text-xs ${theme.text} font-mono h-24 focus:border-[#58a6ff] outline-none resize-none`} placeholder="Paste key (e.g. 1 A 2 B)" value={answerKeyInput} onChange={(e) => setAnswerKeyInput(e.target.value)} />
                             </div>
                             {pages[currentPageIndex] && (
                                 <div className={`flex items-center justify-between p-3 ${theme.inputBg} border ${theme.border} rounded-md`}><span className={`text-xs ${theme.textMuted}`}>Page Score</span><span className="text-lg font-bold text-[#e6edf3]">{getScore(pages[currentPageIndex]).score} <span className={`text-xs ${theme.textMuted} font-normal ml-1`}>/ {getScore(pages[currentPageIndex]).total}</span></span></div>
@@ -876,36 +889,36 @@ const App = () => {
                         </div>
                     </div>
                     <div className="flex-1 overflow-y-auto p-2">
-                         {pages[currentPageIndex]?.results && Object.keys(pages[currentPageIndex].results).length > 0 ? (
+                        {pages[currentPageIndex]?.results && Object.keys(pages[currentPageIndex].results).length > 0 ? (
                             <div className="space-y-1">
                                 {Object.entries(pages[currentPageIndex].results).sort((a, b) => parseInt(a[0].replace(/\D/g, '')) - parseInt(b[0].replace(/\D/g, ''))).map(([key, val]) => {
-                                        const qNum = parseInt(key.replace(/\D/g, '')) || 0;
-                                        const correctAns = parsedAnswerKey[qNum.toString()];
-                                        const isCorrect = correctAns && val.label === correctAns;
-                                        const isGraded = !!correctAns;
-                                        return (
-                                            <div key={key} className={`flex items-center justify-between px-3 py-2 rounded border text-xs ${!isGraded ? `${theme.inputBg} ${theme.border}` : isCorrect ? 'bg-[#238636]/10 border-[#238636]/40' : 'bg-[#da3633]/10 border-[#da3633]/40'}`}>
-                                                <div className="flex items-center gap-3"><span className={`font-mono ${theme.textMuted} w-6`}>{key}</span><span className={`font-bold ${isGraded ? (isCorrect ? 'text-[#3fb950]' : 'text-[#f85149]') : theme.text}`}>{val.label}</span></div>
-                                                {isGraded && !isCorrect && (<span className={`font-mono ${theme.textMuted}`}>Exp: {correctAns}</span>)}
-                                            </div>
-                                        );
+                                    const qNum = parseInt(key.replace(/\D/g, '')) || 0;
+                                    const correctAns = parsedAnswerKey[qNum.toString()];
+                                    const isCorrect = correctAns && val.label === correctAns;
+                                    const isGraded = !!correctAns;
+                                    return (
+                                        <div key={key} className={`flex items-center justify-between px-3 py-2 rounded border text-xs ${!isGraded ? `${theme.inputBg} ${theme.border}` : isCorrect ? 'bg-[#238636]/10 border-[#238636]/40' : 'bg-[#da3633]/10 border-[#da3633]/40'}`}>
+                                            <div className="flex items-center gap-3"><span className={`font-mono ${theme.textMuted} w-6`}>{key}</span><span className={`font-bold ${isGraded ? (isCorrect ? 'text-[#3fb950]' : 'text-[#f85149]') : theme.text}`}>{val.label}</span></div>
+                                            {isGraded && !isCorrect && (<span className={`font-mono ${theme.textMuted}`}>Exp: {correctAns}</span>)}
+                                        </div>
+                                    );
                                 })}
                             </div>
-                         ) : (<div className={`text-center ${theme.textMuted} py-10 text-xs`}>No scan results</div>)}
+                        ) : (<div className={`text-center ${theme.textMuted} py-10 text-xs`}>No scan results</div>)}
                     </div>
                 </div>
             )}
             {isMarksSettingsOpen && (
                 <div className="fixed inset-0 bg-black/60 flex items-center justify-center z-50">
                     <div className={`${theme.sidebar} border ${theme.border} p-6 rounded-xl w-80 shadow-2xl`}>
-                        <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-[#e6edf3]">Question Weighting</h3><button onClick={() => setIsMarksSettingsOpen(false)}><X size={16} className={theme.textMuted}/></button></div>
-                        <div className="space-y-2 max-h-60 overflow-y-auto mb-4">{marksConfig.map((conf, i) => (<div key={i} className="flex gap-2 items-center"><input type="number" value={conf.start} onChange={e => { const n = [...marksConfig]; n[i].start = parseInt(e.target.value); setMarksConfig(n); }} className={`w-14 ${theme.inputBg} border ${theme.border} rounded p-1 text-xs`}/><span className={theme.textMuted}>-</span><input type="number" value={conf.end} onChange={e => { const n = [...marksConfig]; n[i].end = parseInt(e.target.value); setMarksConfig(n); }} className={`w-14 ${theme.inputBg} border ${theme.border} rounded p-1 text-xs`}/><span className={theme.textMuted}>:</span><input type="number" value={conf.marks} onChange={e => { const n = [...marksConfig]; n[i].marks = e.target.value; setMarksConfig(n); }} className={`w-12 ${theme.inputBg} border ${theme.border} rounded p-1 text-xs`}/><button onClick={() => {const n=[...marksConfig]; n.splice(i,1); setMarksConfig(n)}} className="text-[#f85149]"><Trash2 size={12}/></button></div>))}</div>
-                        <button onClick={() => setMarksConfig([...marksConfig, {start:0, end:0, marks:1}])} className={`w-full py-1.5 border border-dashed ${theme.border} ${theme.textMuted} text-xs ${theme.buttonHover} rounded mb-2`}>+ Add Range</button>
+                        <div className="flex justify-between items-center mb-4"><h3 className="font-bold text-[#e6edf3]">Question Weighting</h3><button onClick={() => setIsMarksSettingsOpen(false)}><X size={16} className={theme.textMuted} /></button></div>
+                        <div className="space-y-2 max-h-60 overflow-y-auto mb-4">{marksConfig.map((conf, i) => (<div key={i} className="flex gap-2 items-center"><input type="number" value={conf.start} onChange={e => { const n = [...marksConfig]; n[i].start = parseInt(e.target.value); setMarksConfig(n); }} className={`w-14 ${theme.inputBg} border ${theme.border} rounded p-1 text-xs`} /><span className={theme.textMuted}>-</span><input type="number" value={conf.end} onChange={e => { const n = [...marksConfig]; n[i].end = parseInt(e.target.value); setMarksConfig(n); }} className={`w-14 ${theme.inputBg} border ${theme.border} rounded p-1 text-xs`} /><span className={theme.textMuted}>:</span><input type="number" value={conf.marks} onChange={e => { const n = [...marksConfig]; n[i].marks = e.target.value; setMarksConfig(n); }} className={`w-12 ${theme.inputBg} border ${theme.border} rounded p-1 text-xs`} /><button onClick={() => { const n = [...marksConfig]; n.splice(i, 1); setMarksConfig(n) }} className="text-[#f85149]"><Trash2 size={12} /></button></div>))}</div>
+                        <button onClick={() => setMarksConfig([...marksConfig, { start: 0, end: 0, marks: 1 }])} className={`w-full py-1.5 border border-dashed ${theme.border} ${theme.textMuted} text-xs ${theme.buttonHover} rounded mb-2`}>+ Add Range</button>
                         <button onClick={() => setIsMarksSettingsOpen(false)} className="w-full py-2 bg-[#238636] text-white rounded font-medium text-xs">Done</button>
                     </div>
                 </div>
             )}
-            {toast && (<div className={`fixed bottom-6 right-6 px-4 py-3 rounded-md shadow-lg text-white text-xs font-medium z-50 flex items-center gap-3 animate-fade-in-up ${toast.type === 'error' ? 'bg-[#da3633]' : 'bg-[#238636]'}`}>{toast.type === 'error' ? <X size={14}/> : <CheckCircle2 size={14}/>}{toast.message}</div>)}
+            {toast && (<div className={`fixed bottom-6 right-6 px-4 py-3 rounded-md shadow-lg text-white text-xs font-medium z-50 flex items-center gap-3 animate-fade-in-up ${toast.type === 'error' ? 'bg-[#da3633]' : 'bg-[#238636]'}`}>{toast.type === 'error' ? <X size={14} /> : <CheckCircle2 size={14} />}{toast.message}</div>)}
         </div>
     );
 };
