@@ -1,650 +1,879 @@
 import React, { useState, useRef, useEffect } from 'react';
-import { 
+import {
     Trash2, CheckCircle2, ChevronRight, ChevronLeft, 
-    ScanLine, X, Loader2, FolderInput, Files, Download, 
-    MousePointer2, Layers, ZoomIn, ZoomOut, Anchor, Database
+    ZoomIn, ZoomOut, LayoutTemplate, ScanLine, 
+    X, Loader2, FolderInput, Files, Anchor, 
+    Scissors, Download, Image as ImageIcon, Layers
 } from 'lucide-react';
 
 // --- External Libraries (Dynamic Load) ---
 
+// PDF.js
 const PDF_LIB_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js";
 const PDF_WORKER_URL = "https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js";
-const JSZIP_URL = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
+
+// Tesseract.js (用于自动对齐)
+const TESSERACT_LIB_URL = "https://cdn.jsdelivr.net/npm/tesseract.js@5/dist/tesseract.min.js";
+
+// JSZip (用于打包下载裁切图)
+const JSZIP_LIB_URL = "https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js";
 
 const loadPdfLib = async () => {
-    if (window.pdfjsLib) return window.pdfjsLib;
+    // If already loaded, ensure worker is set
+    if (window.pdfjsLib) {
+        if (!window.pdfjsLib.GlobalWorkerOptions.workerSrc) {
+             window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
+        }
+        return window.pdfjsLib;
+    }
+
     return new Promise((resolve, reject) => {
         const script = document.createElement('script');
         script.src = PDF_LIB_URL;
         script.onload = () => {
-            window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
-            resolve(window.pdfjsLib);
+            if (window.pdfjsLib) {
+                window.pdfjsLib.GlobalWorkerOptions.workerSrc = PDF_WORKER_URL;
+                resolve(window.pdfjsLib);
+            } else {
+                reject(new Error("PDF.js library loaded but object not found"));
+            }
         };
+        script.onerror = () => reject(new Error("Failed to load PDF.js script"));
+        document.body.appendChild(script);
+    });
+};
+
+const loadTesseractLib = async () => {
+    if (window.Tesseract) return window.Tesseract;
+    return new Promise((resolve, reject) => {
+        const script = document.createElement('script');
+        script.src = TESSERACT_LIB_URL;
+        script.onload = () => resolve(window.Tesseract);
         script.onerror = reject;
         document.body.appendChild(script);
     });
 };
 
-const loadJsZip = async () => {
+const loadJsZipLib = async () => {
     if (window.JSZip) return window.JSZip;
     return new Promise((resolve, reject) => {
         const script = document.createElement('script');
-        script.src = JSZIP_URL;
+        script.src = JSZIP_LIB_URL;
         script.onload = () => resolve(window.JSZip);
         script.onerror = reject;
         document.body.appendChild(script);
     });
 };
 
-const TrainingApp = () => {
+const App = () => {
     // --- State ---
-    const [step, setStep] = useState(0); // 0: Upload, 1: Template, 2: Processing
-    const [pdfFiles, setPdfFiles] = useState([]);
+    // pages 结构: { id, imageUrl, width, height, originalName, regions: [{x,y,w,h}], crops: [{label, dataUrl}] }
+    const [pages, setPages] = useState([]); 
+    const [currentPageIndex, setCurrentPageIndex] = useState(0);
+    const [pageInput, setPageInput] = useState("1");
+    const [scale, setScale] = useState(1);
+    const [selectedRegionId, setSelectedRegionId] = useState(null);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const [progress, setProgress] = useState({ current: 0, total: 0, status: '' });
+    const [showResultsSidebar, setShowResultsSidebar] = useState(true);
+    const [toast, setToast] = useState(null);
+
+    // Batch Wizard State
+    const [isBatchMode, setIsBatchMode] = useState(false);
+    const [batchStep, setBatchStep] = useState(0); // 0: Upload, 1: Template
+    const [batchPdfFiles, setBatchPdfFiles] = useState([]);
     const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
-    const [previewPageNum, setPreviewPageNum] = useState(1);
+    const [previewPdfPage, setPreviewPdfPage] = useState(1);
     const [previewTotalPages, setPreviewTotalPages] = useState(1);
     const [templateRegions, setTemplateRegions] = useState([]);
-    const [isLoading, setIsLoading] = useState(false);
-    const [progress, setProgress] = useState({ current: 0, total: 0, status: '' });
-    const [toast, setToast] = useState(null);
-    
-    // Config
-    const [scale, setScale] = useState(1);
-    const [autoAlign, setAutoAlign] = useState(true);
+    const [isPdfLoading, setIsPdfLoading] = useState(false);
+    const [pagesPerExam, setPagesPerExam] = useState(1); // 如果一个PDF有多份文件
 
     // Refs
     const canvasRef = useRef(null);
+    const templateCanvasRef = useRef(null);
     const folderInputRef = useRef(null);
+
+    // --- Keyboard Shortcuts ---
+    useEffect(() => {
+        const handleKeyDown = (e) => {
+            if (e.target.tagName === 'INPUT' || e.target.tagName === 'TEXTAREA') return;
+
+            switch (e.key) {
+                case 'Delete':
+                case 'Backspace':
+                    if (selectedRegionId && !isBatchMode) {
+                        deleteSelectedRegion();
+                    }
+                    break;
+                case 'ArrowLeft':
+                    handlePageNavigation('prev');
+                    break;
+                case 'ArrowRight':
+                    handlePageNavigation('next');
+                    break;
+                case '=':
+                case '+':
+                    setScale(s => Math.min(3, s + 0.1));
+                    break;
+                case '-':
+                    setScale(s => Math.max(0.5, s - 0.1));
+                    break;
+                default:
+                    break;
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyDown);
+        return () => window.removeEventListener('keydown', handleKeyDown);
+    }, [selectedRegionId, currentPageIndex, pages, isBatchMode]);
 
     // --- Effects ---
     useEffect(() => {
-        if (step === 1 && previewPdfDoc) {
-            drawTemplate();
-        }
-    }, [step, templateRegions, scale, previewPageNum]);
-
-    useEffect(() => {
         if (toast) {
-            const t = setTimeout(() => setToast(null), 3000);
-            return () => clearTimeout(t);
+            const timer = setTimeout(() => setToast(null), 3000);
+            return () => clearTimeout(timer);
         }
     }, [toast]);
 
-    const showToast = (msg, type = 'info') => setToast({ msg, type });
+    useEffect(() => {
+        if (!isBatchMode && pages.length > 0 && pages[currentPageIndex]) {
+            drawImageAndRegions();
+            setPageInput((currentPageIndex + 1).toString());
+        }
+    }, [pages, currentPageIndex, scale, selectedRegionId, isBatchMode]);
 
-    // --- PDF Loading ---
-    const handleFolderSelect = async (e) => {
-        const files = Array.from(e.target.files).filter(f => f.type === 'application/pdf');
+    useEffect(() => {
+        if (isBatchMode && batchStep === 1) {
+            drawTemplateCanvas();
+        }
+    }, [batchStep, templateRegions, scale, previewPdfPage, isBatchMode]);
+
+    // --- Helpers ---
+    const showToast = (message, type = 'success') => setToast({ message, type });
+
+    const handlePageNavigation = (direction) => {
+        if (direction === 'prev' && currentPageIndex > 0) setCurrentPageIndex(curr => curr - 1);
+        if (direction === 'next' && currentPageIndex < pages.length - 1) setCurrentPageIndex(curr => curr + 1);
+    };
+
+    const deleteSelectedRegion = () => {
+        if (!selectedRegionId) return;
+        const newPages = [...pages];
+        const page = newPages[currentPageIndex];
+        page.regions = page.regions.filter(r => r.id !== selectedRegionId);
+        // Renumber labels
+        page.regions.forEach((r, idx) => r.label = `Region ${idx + 1}`);
+        setPages(newPages);
+        setSelectedRegionId(null);
+    };
+
+    // --- PDF Logic ---
+    const handleFileSelect = async (e) => {
+        const selectedFiles = e.target.files;
+        if (!selectedFiles || selectedFiles.length === 0) return;
+
+        const files = Array.from(selectedFiles).filter(f => f.type === 'application/pdf');
         if (files.length === 0) {
-            showToast("No PDFs found", "error");
+            showToast("No PDF files selected", "error");
+            e.target.value = ''; // Reset input to allow re-selection
             return;
         }
 
-        setIsLoading(true);
+        setIsPdfLoading(true);
         try {
             const pdfjs = await loadPdfLib();
-            await loadJsZip(); // Preload Zip lib
 
-            // Load first PDF for template
+            // Use the first file to set up the template
             const firstFile = files[0];
-            const buffer = await firstFile.arrayBuffer();
-            const doc = await pdfjs.getDocument(buffer).promise;
+            const arrayBuffer = await firstFile.arrayBuffer();
+            
+            // Add timeout protection for PDF loading
+            const loadingTask = pdfjs.getDocument(arrayBuffer);
+            const pdfDoc = await Promise.race([
+                loadingTask.promise,
+                new Promise((_, reject) => setTimeout(() => reject(new Error("Timeout loading PDF - check connection")), 15000))
+            ]);
 
-            setPdfFiles(files);
-            setPreviewPdfDoc(doc);
-            setPreviewTotalPages(doc.numPages);
-            setPreviewPageNum(1);
-            setStep(1);
+            setBatchPdfFiles(files);
+            setPreviewPdfDoc(pdfDoc);
+            setPreviewTotalPages(pdfDoc.numPages);
+            setPreviewPdfPage(1);
+            setTemplateRegions([]);
+            setBatchStep(1); // Go to Template Step
         } catch (err) {
             console.error(err);
-            showToast("Failed to load PDF", "error");
+            showToast(`Failed to load PDF: ${err.message}`, "error");
         } finally {
-            setIsLoading(false);
+            setIsPdfLoading(false);
+            e.target.value = ''; // Reset input to allow re-selection
         }
     };
 
-    // --- Database Download Logic ---
-    const handleDownloadDbData = async () => {
-        setIsLoading(true);
-        setProgress({ current: 0, total: 100, status: "Fetching data from DB..." });
+    const renderPdfToImage = async (pdfDoc, pageNum) => {
+        const page = await pdfDoc.getPage(pageNum);
+        const viewport = page.getViewport({ scale: 2.0 }); // High res for processing
+        const canvas = document.createElement('canvas');
+        const context = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+
+        // FIX: Fill white background first to prevent black transparency
+        context.fillStyle = '#FFFFFF';
+        context.fillRect(0, 0, canvas.width, canvas.height);
+
+        await page.render({ canvasContext: context, viewport: viewport }).promise;
+        return {
+            dataUrl: canvas.toDataURL('image/jpeg', 0.8),
+            width: viewport.width, // FIX: Use Full Width
+            height: viewport.height
+        };
+    };
+
+    // --- Auto OCR Alignment Helper ---
+    const findUniqueAnchor = async (worker, canvas) => {
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.8);
+        const { data: { words } } = await worker.recognize(dataUrl);
+
+        const wordCounts = {};
+        const wordPositions = {};
+
+        words.forEach(w => {
+            const text = w.text.trim();
+            // Filter out small words or symbols to find good anchors
+            if (text.length > 3 && /^[a-zA-Z0-9]+$/.test(text) && w.confidence > 80) {
+                if (!wordCounts[text]) {
+                    wordCounts[text] = 0;
+                    wordPositions[text] = { x: w.bbox.x0, y: w.bbox.y0 };
+                }
+                wordCounts[text]++;
+            }
+        });
+
+        // Find words that appear exactly once (unique anchors)
+        const candidates = Object.keys(wordCounts).filter(word => wordCounts[word] === 1);
+        if (candidates.length === 0) return null;
+
+        // Sort by position (prefer top-left)
+        candidates.sort((a, b) => {
+            const posA = wordPositions[a];
+            const posB = wordPositions[b];
+            return (posA.y - posB.y) || (posA.x - posB.x);
+        });
+
+        const bestWord = candidates[0];
+        return { word: bestWord, pos: wordPositions[bestWord] };
+    };
+
+    const findWordPosition = async (worker, canvas, wordToFind) => {
+        if (!wordToFind) return null;
+
+        const dataUrl = canvas.toDataURL('image/jpeg', 0.7);
+        const { data: { words } } = await worker.recognize(dataUrl);
+
+        const target = wordToFind.toLowerCase();
+        // Relaxed matching
+        const match = words.find(w => w.text.toLowerCase().trim().includes(target));
+
+        if (match) {
+            return { x: match.bbox.x0, y: match.bbox.y0 };
+        }
+        return null;
+    };
+
+    // --- Main Processing: Load PDFs & Align ---
+    const handleBatchLoadAndAlign = async () => {
+        if (templateRegions.length === 0) {
+            showToast("Please define at least one crop region.", "error");
+            return;
+        }
+
+        setIsProcessing(true);
+        setIsBatchMode(false);
+        const newPages = [];
+        const pdfjs = await loadPdfLib();
+
+        let tesseractWorker = null;
 
         try {
-            // 1. Fetch Data
-            const response = await fetch('/.netlify/functions/get-scans');
+            let anchorData = null;
+
+            // Initialize Alignment
+            setProgress({ current: 0, total: 0, status: "Initializing Alignment Engine..." });
+            await loadTesseractLib();
+            tesseractWorker = await window.Tesseract.createWorker('eng');
+
+            // 1. Analyze Template to find Anchor
+            setProgress({ current: 0, total: 0, status: "Analyzing template for anchor point..." });
+            const page = await previewPdfDoc.getPage(previewPdfPage);
+            const viewport = page.getViewport({ scale: 2.0 });
+            const canvas = document.createElement('canvas');
+            canvas.width = viewport.width;
+            canvas.height = viewport.height;
+            const ctx = canvas.getContext('2d');
             
-            // Check if response is HTML (Vite fallback) instead of JSON
-            const contentType = response.headers.get("content-type");
-            if (contentType && contentType.includes("text/html")) {
-                throw new Error("Function not found. Run 'netlify dev' to enable backend.");
-            }
+            // FIX: Fill white background for Template Analysis
+            ctx.fillStyle = '#FFFFFF';
+            ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-            if (!response.ok) throw new Error(`Server error: ${response.status}`);
-            
-            const rows = await response.json();
+            await page.render({ canvasContext: ctx, viewport }).promise;
 
-            if (rows.length === 0) {
-                showToast("No training data found in database.", "error");
-                return;
-            }
+            anchorData = await findUniqueAnchor(tesseractWorker, canvas);
 
-            setProgress({ current: 0, total: rows.length, status: "Organizing files..." });
-
-            // 2. Prepare Zip
-            const JSZip = await loadJsZip();
-            const zip = new JSZip();
-            const rootFolder = zip.folder("db_training_data");
-
-            // Create A, B, C, D, E folders
-            const folders = {
-                'A': rootFolder.folder('A'),
-                'B': rootFolder.folder('B'),
-                'C': rootFolder.folder('C'),
-                'D': rootFolder.folder('D'),
-                'E': rootFolder.folder('E') // For EMPTY
-            };
-
-            // 3. Process Rows
-            rows.forEach((row, index) => {
-                // Filename format: timestamp_LABEL_confidence
-                // e.g. 2023-10-10_A_0.99
-                const parts = row.filename.split('_');
-                
-                let label = 'UNKNOWN';
-                if (parts.length >= 3) {
-                    label = parts[parts.length - 2];
-                }
-                
-                // Map EMPTY to E
-                if (label === 'EMPTY') label = 'E';
-
-                // Ensure valid folder, fallback to UNKNOWN if label is weird
-                const targetFolder = folders[label] || rootFolder.folder('UNKNOWN');
-
-                // Decode Base64 (remove data:image/jpeg;base64, prefix if present)
-                let base64Data = row.image_data;
-                if (base64Data.includes(',')) {
-                    base64Data = base64Data.split(',')[1];
-                }
-
-                if (base64Data) {
-                    targetFolder.file(`${row.filename}.jpg`, base64Data, {base64: true});
-                }
-            });
-
-            setProgress({ current: 100, total: 100, status: "Zipping..." });
-
-            // 4. Download
-            const content = await zip.generateAsync({ type: "blob" });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(content);
-            link.download = "db_training_set.zip";
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-
-            // 5. Delete from DB using the same endpoint with DELETE method
-            setProgress({ current: 100, total: 100, status: "Clearing database..." });
-            const deleteResponse = await fetch('/.netlify/functions/get-scans', { method: 'DELETE' });
-            
-            if (deleteResponse.ok) {
-                showToast(`Downloaded & Cleared ${rows.length} images.`, "success");
+            if (!anchorData) {
+                console.warn("Could not find a unique anchor word. Alignment disabled.");
             } else {
-                showToast(`Downloaded, but failed to clear DB (${deleteResponse.status}).`, "warning");
+                console.log(`Auto-Alignment Anchor: "${anchorData.word}" at`, anchorData.pos);
             }
 
+            // 2. Build Task List
+            let tasks = [];
+
+            if (batchPdfFiles.length === 1 && pagesPerExam > 0) {
+                // Single PDF mode
+                const file = batchPdfFiles[0];
+                const arrayBuffer = await file.arrayBuffer();
+                const doc = await pdfjs.getDocument(arrayBuffer).promise;
+
+                for (let p = previewPdfPage; p <= doc.numPages; p += pagesPerExam) {
+                    tasks.push({
+                        doc,
+                        pageNum: p,
+                        originalName: `${file.name.replace('.pdf', '')}_P${p}`
+                    });
+                }
+            } else {
+                // Multi PDF mode
+                for (let i = 0; i < batchPdfFiles.length; i++) {
+                    const file = batchPdfFiles[i];
+                    const arrayBuffer = await file.arrayBuffer();
+                    const doc = await pdfjs.getDocument(arrayBuffer).promise;
+                    // Assuming page 1 is the target, or user selected page
+                    const targetP = doc.numPages >= previewPdfPage ? previewPdfPage : 1;
+                    tasks.push({
+                        doc,
+                        pageNum: targetP,
+                        originalName: file.name.replace('.pdf', '')
+                    });
+                }
+            }
+
+            // 3. Process each page (Render & Align)
+            for (let i = 0; i < tasks.length; i++) {
+                const task = tasks[i];
+                setProgress({ current: i + 1, total: tasks.length, status: `Loading & Aligning ${task.originalName}...` });
+
+                const page = await task.doc.getPage(task.pageNum);
+                const viewport = page.getViewport({ scale: 2.0 });
+                const canvas = document.createElement('canvas');
+                canvas.width = viewport.width;
+                canvas.height = viewport.height;
+                const ctx = canvas.getContext('2d');
+                
+                // FIX: Fill white background for processing pages
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                await page.render({ canvasContext: ctx, viewport }).promise;
+
+                // 3a. Calculate Offset based on Anchor
+                let offsetX = 0;
+                let offsetY = 0;
+
+                if (anchorData && tesseractWorker) {
+                    const targetPos = await findWordPosition(tesseractWorker, canvas, anchorData.word);
+                    if (targetPos) {
+                        offsetX = targetPos.x - anchorData.pos.x;
+                        offsetY = targetPos.y - anchorData.pos.y;
+
+                        // Safety check: ignore massive jumps which might be errors
+                        if (Math.abs(offsetX) > canvas.width * 0.3 || Math.abs(offsetY) > canvas.height * 0.3) {
+                            offsetX = 0; offsetY = 0;
+                        }
+                    }
+                }
+
+                // 4. Apply Offset to Regions
+                // FIX: Use 1:1 coordinates because canvas is High Res
+                const adjustedRegions = templateRegions.map(r => ({
+                    ...r,
+                    x: r.x + offsetX,
+                    y: r.y + offsetY
+                }));
+
+                newPages.push({
+                    id: Date.now() + i,
+                    imageUrl: canvas.toDataURL('image/jpeg', 0.8),
+                    width: viewport.width, // FIX: Use Full Width
+                    height: viewport.height,
+                    originalName: task.originalName,
+                    regions: adjustedRegions,
+                    crops: []
+                });
+            }
+
+            setPages(newPages);
+            setCurrentPageIndex(0);
+            showToast(`Imported ${newPages.length} documents`, "success");
         } catch (e) {
             console.error(e);
-            showToast("Download failed: " + e.message, "error");
+            showToast("Error importing: " + e.message, "error");
         } finally {
-            setIsLoading(false);
+            if (tesseractWorker) try { await tesseractWorker.terminate(); } catch (e) { }
+            setIsProcessing(false);
             setProgress({ current: 0, total: 0, status: '' });
         }
     };
 
-    // --- Template Drawing Logic ---
-    const renderPage = async (doc, pageNum) => {
-        const page = await doc.getPage(pageNum);
-        const viewport = page.getViewport({ scale: 1.5 }); // Good resolution for display
-        const canvas = document.createElement('canvas');
-        const ctx = canvas.getContext('2d');
-        canvas.width = viewport.width;
-        canvas.height = viewport.height;
-        await page.render({ canvasContext: ctx, viewport }).promise;
-        return { 
-            dataUrl: canvas.toDataURL('image/jpeg'), 
-            width: viewport.width / 1.5, // Normalize 
-            height: viewport.height / 1.5 
-        };
-    };
+    // --- Cropping Logic ---
+    const handleCropExtraction = async () => {
+        if (pages.length === 0) return;
+        setIsProcessing(true);
+        const updatedPages = [...pages];
 
-    const drawTemplate = async (ghostBox = null) => {
-        if (!canvasRef.current || !previewPdfDoc) return;
-        const ctx = canvasRef.current.getContext('2d');
-        
-        const { dataUrl, width, height } = await renderPage(previewPdfDoc, previewPageNum);
-        
-        const img = new Image();
-        img.src = dataUrl;
-        await new Promise(r => img.onload = r);
+        try {
+            let processedCount = 0;
+            const totalOps = updatedPages.reduce((acc, p) => acc + p.regions.length, 0);
 
-        canvasRef.current.width = width * scale;
-        canvasRef.current.height = height * scale;
-        ctx.scale(scale, scale);
-        
-        ctx.drawImage(img, 0, 0, width, height);
+            for (let i = 0; i < updatedPages.length; i++) {
+                const page = updatedPages[i];
+                if (!page.regions || page.regions.length === 0) continue;
 
-        templateRegions.forEach(r => {
-            ctx.fillStyle = 'rgba(88, 166, 255, 0.2)';
-            ctx.strokeStyle = '#58a6ff';
-            ctx.lineWidth = 2;
-            ctx.fillRect(r.x, r.y, r.width, r.height);
-            ctx.strokeRect(r.x, r.y, r.width, r.height);
-            
-            ctx.fillStyle = '#58a6ff';
-            const textWidth = ctx.measureText(r.label).width + 8;
-            ctx.fillRect(r.x, r.y - 20, textWidth, 20);
-            ctx.fillStyle = '#fff';
-            ctx.font = 'bold 12px sans-serif';
-            ctx.fillText(r.label, r.x + 4, r.y - 5);
-        });
+                const img = new Image();
+                img.src = page.imageUrl;
+                await new Promise((resolve, reject) => { img.onload = resolve; img.onerror = reject; });
+                
+                page.crops = []; // Reset crops
 
-        if (ghostBox) {
-            ctx.strokeStyle = '#d29922';
-            ctx.setLineDash([5, 5]);
-            ctx.strokeRect(ghostBox.x, ghostBox.y, ghostBox.w, ghostBox.h);
-            ctx.setLineDash([]);
+                for (const region of page.regions) {
+                    setProgress({ current: processedCount + 1, total: totalOps, status: `Cropping ${page.originalName}: ${region.label}...` });
+                    
+                    // Create a canvas for the crop
+                    const cCanvas = document.createElement('canvas');
+                    
+                    // FIX: Ratio is now 1:1 because regions are in High Res coordinates
+                    const cropX = region.x;
+                    const cropY = region.y;
+                    const cropW = region.width;
+                    const cropH = region.height;
+
+                    // Skip invalid crops
+                    if (cropW <= 0 || cropH <= 0) continue;
+
+                    cCanvas.width = cropW;
+                    cCanvas.height = cropH;
+                    
+                    const ctx = cCanvas.getContext('2d');
+                    // FIX: Draw directly
+                    ctx.drawImage(img, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
+
+                    page.crops.push({
+                        label: region.label,
+                        dataUrl: cCanvas.toDataURL('image/jpeg', 0.9)
+                    });
+                    processedCount++;
+                }
+            }
+            setPages(updatedPages);
+            setShowResultsSidebar(true);
+            showToast("Cropping Complete!", "success");
+        } catch (e) {
+            console.error(e);
+            showToast("Crop failed: " + e.message, "error");
+        } finally {
+            setIsProcessing(false);
+            setProgress({ current: 0, total: 0, status: '' });
         }
     };
 
-    // --- Mouse Interaction ---
-    const handleMouseDown = (e) => {
-        const canvas = canvasRef.current;
+    const handleDownloadZip = async () => {
+        setIsProcessing(true);
+        setProgress({ current: 0, total: 0, status: "Generating ZIP..." });
+        try {
+            const JSZip = await loadJsZipLib();
+            const zip = new JSZip();
+            
+            let count = 0;
+            pages.forEach(page => {
+                if(page.crops && page.crops.length > 0) {
+                    page.crops.forEach(crop => {
+                        // Data URL format: "data:image/jpeg;base64,....."
+                        const base64Data = crop.dataUrl.split(',')[1];
+                        const fileName = `${page.originalName}_${crop.label}.jpg`;
+                        zip.file(fileName, base64Data, {base64: true});
+                        count++;
+                    });
+                }
+            });
+
+            if (count === 0) {
+                showToast("No cropped images to download.", "error");
+                return;
+            }
+
+            const content = await zip.generateAsync({type: "blob"});
+            const url = window.URL.createObjectURL(content);
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = "cropped_images.zip";
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            window.URL.revokeObjectURL(url);
+            showToast("ZIP Downloaded!", "success");
+        } catch (e) {
+            console.error(e);
+            showToast("Zip creation failed", "error");
+        } finally {
+            setIsProcessing(false);
+            setProgress({ current: 0, total: 0, status: '' });
+        }
+    };
+
+    // --- Drawing Logic ---
+    const getMousePos = (e, canvas) => {
         const rect = canvas.getBoundingClientRect();
-        const startX = (e.clientX - rect.left) / scale;
-        const startY = (e.clientY - rect.top) / scale;
-        
-        const clickedIdx = templateRegions.findIndex(r => 
-            startX >= r.x && startX <= r.x + r.width &&
-            startY >= r.y && startY <= r.y + r.height
+        return {
+            x: (e.clientX - rect.left) / scale,
+            y: (e.clientY - rect.top) / scale
+        };
+    };
+
+    const handleCanvasMouseDown = (e, isTemplate = false) => {
+        const canvas = isTemplate ? templateCanvasRef.current : canvasRef.current;
+        const currentRegions = isTemplate ? templateRegions : pages[currentPageIndex]?.regions;
+        const setReg = isTemplate ? setTemplateRegions : (newRegs) => {
+            const updatedPages = [...pages];
+            updatedPages[currentPageIndex].regions = newRegs;
+            setPages(updatedPages);
+        };
+
+        if (!canvas || !currentRegions) return;
+
+        const pos = getMousePos(e, canvas);
+
+        // Check if clicking existing region (Selection/Delete)
+        const clickedIndex = currentRegions.findIndex(r =>
+            pos.x >= r.x && pos.x <= r.x + r.width &&
+            pos.y >= r.y && pos.y <= r.y + r.height
         );
 
-        if (clickedIdx >= 0) {
-            if (e.button === 2 || e.shiftKey) {
-                const n = [...templateRegions];
-                n.splice(clickedIdx, 1);
-                n.forEach((r, i) => r.label = `Q${i + 1}`);
-                setTemplateRegions(n);
-                drawTemplate();
+        if (clickedIndex >= 0) {
+            if (e.button === 2 || e.shiftKey) { // Right click or Shift+Click to delete
+                const newRegions = [...currentRegions];
+                newRegions.splice(clickedIndex, 1);
+                // Renumber
+                newRegions.forEach((r, idx) => r.label = `Region ${idx + 1}`);
+                setReg(newRegions);
+                if (!isTemplate) setSelectedRegionId(null);
+                return;
+            }
+
+            if (!isTemplate) {
+                setSelectedRegionId(currentRegions[clickedIndex].id);
                 return;
             }
         }
 
-        let isDragging = true;
+        if (!isTemplate) setSelectedRegionId(null);
 
-        const onMove = (em) => {
-            if (!isDragging) return;
-            const mx = (em.clientX - rect.left) / scale;
-            const my = (em.clientY - rect.top) / scale;
-            drawTemplate({ x: startX, y: startY, w: mx - startX, h: my - startY });
+        // Drawing new region
+        const startX = pos.x;
+        const startY = pos.y;
+
+        const onMove = (moveEvent) => {
+            const movePos = getMousePos(moveEvent, canvas);
+            if (isTemplate) drawTemplateCanvas({ x: startX, y: startY, w: movePos.x - startX, h: movePos.y - startY });
+            else drawImageAndRegions({ x: startX, y: startY, w: movePos.x - startX, h: movePos.y - startY });
         };
 
-        const onUp = (eu) => {
-            isDragging = false;
-            window.removeEventListener('mousemove', onMove);
-            window.removeEventListener('mouseup', onUp);
-            
-            const upX = (eu.clientX - rect.left) / scale;
-            const upY = (eu.clientY - rect.top) / scale;
-            const w = upX - startX;
-            const h = upY - startY;
+        const onUp = (upEvent) => {
+            const upPos = getMousePos(upEvent, canvas);
+            const w = upPos.x - startX;
+            const h = upPos.y - startY;
 
             if (Math.abs(w) > 5 && Math.abs(h) > 5) {
-                const region = {
-                    id: Date.now(),
-                    x: w < 0 ? upX : startX,
-                    y: h < 0 ? upY : startY,
+                const newRegion = {
+                    id: Date.now().toString(),
+                    x: w > 0 ? startX : upPos.x,
+                    y: h > 0 ? startY : upPos.y,
                     width: Math.abs(w),
                     height: Math.abs(h),
-                    label: `Q${templateRegions.length + 1}`
+                    label: `Region ${currentRegions.length + 1}`
                 };
-                setTemplateRegions([...templateRegions, region]);
-            } else {
-                drawTemplate(); 
+                setReg([...currentRegions, newRegion]);
             }
+
+            if (isTemplate) drawTemplateCanvas();
+            else drawImageAndRegions();
+
+            canvas.removeEventListener('mousemove', onMove);
+            window.removeEventListener('mouseup', onUp);
         };
 
-        window.addEventListener('mousemove', onMove);
+        canvas.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
     };
 
-    // --- Anchors (Simplified) ---
-    const findAnchors = (ctx, width, height) => {
-        const { data } = ctx.getImageData(0, 0, width, height);
-        const threshold = 200; 
-        const stopY = Math.floor(height * 0.5); 
-        
-        let leftMost = { x: width, y: 0 };
-        let rightMost = { x: 0, y: 0 };
-        let found = false;
+    const drawInternal = async (canvas, regions, imageSource, ghostRect = null, isTemplate = false) => {
+        if (!canvas) return;
+        const ctx = canvas.getContext('2d');
+        const img = new Image();
+        img.src = imageSource;
 
-        for (let y = height - 1; y >= stopY; y--) {
-            for (let x = 0; x < width; x++) {
-                const i = (y * width + x) * 4;
-                if (data[i] < threshold) {
-                    if (x < leftMost.x) leftMost = { x, y };
-                    if (x > rightMost.x) rightMost = { x, y };
-                    found = true;
-                }
-            }
-        }
-        return found ? { left: leftMost, right: rightMost } : null;
-    };
-
-    // --- CORE LOGIC: Crop & Zip (Local PDFs) ---
-    const handleGenerateDataset = async () => {
-        if (templateRegions.length === 0) {
-            showToast("Define at least one answer box.", "error");
+        try {
+            await new Promise((resolve, reject) => {
+                img.onload = resolve;
+                img.onerror = () => reject(new Error("Image load failed"));
+            });
+        } catch (err) {
+            console.error(err);
             return;
         }
 
-        setStep(2); // Processing UI
-        setIsLoading(true);
+        canvas.width = img.width * scale;
+        canvas.height = img.height * scale;
+        ctx.scale(scale, scale);
+        ctx.drawImage(img, 0, 0, img.width, img.height);
 
-        try {
-            const JSZip = await loadJsZip();
-            const zip = new JSZip();
-            const pdfjs = await loadPdfLib();
+        regions.forEach(r => {
+            const isSelected = !isTemplate && r.id === selectedRegionId;
+            ctx.strokeStyle = isSelected ? '#58a6ff' : '#d29922'; // Orange/Yellow for crops
+            ctx.lineWidth = 2;
+            ctx.fillStyle = isSelected ? 'rgba(88, 166, 255, 0.2)' : 'rgba(210, 153, 34, 0.1)';
+            ctx.fillRect(r.x, r.y, r.width, r.height);
+            ctx.strokeRect(r.x, r.y, r.width, r.height);
 
-            const datasetFolder = zip.folder("dataset");
-            templateRegions.forEach(r => datasetFolder.folder(r.label));
+            // Label background
+            ctx.fillStyle = isSelected ? '#58a6ff' : '#d29922';
+            const labelW = ctx.measureText(r.label).width + 8;
+            ctx.fillRect(r.x, r.y - 18, labelW, 18);
+            
+            // Label text
+            ctx.fillStyle = '#000000';
+            ctx.font = 'bold 11px monospace';
+            ctx.textBaseline = 'middle';
+            ctx.fillText(r.label, r.x + 4, r.y - 9);
+        });
 
-            // Template Anchors
-            const tPage = await previewPdfDoc.getPage(previewPageNum);
-            const tView = tPage.getViewport({ scale: 2.0 });
-            const tCanvas = document.createElement('canvas');
-            tCanvas.width = tView.width; tCanvas.height = tView.height;
-            const tCtx = tCanvas.getContext('2d');
-            await tPage.render({ canvasContext: tCtx, viewport: tView }).promise;
-            const tAnchors = findAnchors(tCtx, tCanvas.width, tCanvas.height);
-
-            for (let i = 0; i < pdfFiles.length; i++) {
-                const file = pdfFiles[i];
-                setProgress({ current: i + 1, total: pdfFiles.length, status: `Processing ${file.name}...` });
-
-                const buffer = await file.arrayBuffer();
-                const doc = await pdfjs.getDocument(buffer).promise;
-                if (doc.numPages < previewPageNum) continue;
-
-                const page = await doc.getPage(previewPageNum);
-                const viewport = page.getViewport({ scale: 2.0 }); 
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                canvas.width = viewport.width; canvas.height = viewport.height;
-                await page.render({ canvasContext: ctx, viewport }).promise;
-
-                let offX = 0, offY = 0;
-                if (autoAlign && tAnchors) {
-                    const target = findAnchors(ctx, canvas.width, canvas.height);
-                    if (target) {
-                        offX = target.left.x - tAnchors.left.x;
-                        offY = target.left.y - tAnchors.left.y;
-                    }
-                }
-
-                for (const region of templateRegions) {
-                    const rX = (region.x * 2.0) + offX;
-                    const rY = (region.y * 2.0) + offY;
-                    const rW = region.width * 2.0;
-                    const rH = region.height * 2.0;
-
-                    const cropCanvas = document.createElement('canvas');
-                    cropCanvas.width = rW; cropCanvas.height = rH;
-                    const cropCtx = cropCanvas.getContext('2d');
-                    cropCtx.drawImage(canvas, rX, rY, rW, rH, 0, 0, rW, rH);
-
-                    const blob = await new Promise(r => cropCanvas.toBlob(r, 'image/jpeg', 0.95));
-                    const safeName = file.name.replace(/\.pdf$/i, '').replace(/[^a-z0-9]/gi, '_');
-                    datasetFolder.folder(region.label).file(`${safeName}_${region.label}.jpg`, blob);
-                }
-            }
-
-            setProgress({ current: pdfFiles.length, total: pdfFiles.length, status: "Compressing..." });
-            const content = await zip.generateAsync({ type: "blob" });
-            const link = document.createElement('a');
-            link.href = URL.createObjectURL(content);
-            link.download = "local_dataset.zip";
-            document.body.appendChild(link);
-            link.click();
-            document.body.removeChild(link);
-
-            showToast("Dataset generated!", "success");
-            setStep(1); 
-
-        } catch (e) {
-            console.error(e);
-            showToast("Error: " + e.message, "error");
-            setStep(1);
-        } finally {
-            setIsLoading(false);
+        if (ghostRect) {
+            ctx.strokeStyle = '#f85149';
+            ctx.lineWidth = 2;
+            ctx.setLineDash([5, 3]);
+            ctx.strokeRect(ghostRect.x, ghostRect.y, ghostRect.w, ghostRect.h);
+            ctx.setLineDash([]);
         }
     };
 
-    // --- UI (GitHub Dark Theme) ---
-    const theme = {
-        bg: 'bg-[#0d1117]',
-        sidebar: 'bg-[#161b22]',
-        border: 'border-[#30363d]',
-        text: 'text-[#c9d1d9]',
-        textMuted: 'text-[#8b949e]',
-        accent: 'text-[#58a6ff]',
-        accentBg: 'bg-[#1f6feb]',
-        success: 'text-[#3fb950]',
-        buttonHover: 'hover:bg-[#21262d]',
-        inputBg: 'bg-[#0d1117]'
+    const drawImageAndRegions = (ghostRect = null) => {
+        if (!pages[currentPageIndex]) return;
+        drawInternal(canvasRef.current, pages[currentPageIndex].regions, pages[currentPageIndex].imageUrl, ghostRect, false);
     };
 
-    return (
-        <div className={`h-screen w-screen ${theme.bg} ${theme.text} flex flex-col font-sans`}>
-            {/* Header */}
-            <div className={`h-16 border-b ${theme.border} ${theme.sidebar} flex items-center justify-between px-6`}>
-                <div className="flex items-center gap-2">
-                    <Layers className={theme.success} size={24}/>
-                    <h1 className="font-bold text-lg">Dataset Creator</h1>
-                </div>
-                
-                {/* Header Actions */}
-                <div className="flex items-center gap-4">
-                    {/* Database Download Button */}
-                    <button 
-                        onClick={handleDownloadDbData}
-                        disabled={isLoading}
-                        className={`px-3 py-1.5 ${theme.buttonHover} border ${theme.border} rounded text-xs flex items-center gap-2 text-[#e3b341] transition-all`}
-                        title="Download collected training data"
-                    >
-                        {isLoading && step === 0 ? <Loader2 size={14} className="animate-spin"/> : <Database size={14}/>}
-                        Download DB Data
-                    </button>
+    const drawTemplateCanvas = async (ghostRect = null) => {
+        if (!previewPdfDoc) return;
+        const render = await renderPdfToImage(previewPdfDoc, previewPdfPage);
+        drawInternal(templateCanvasRef.current, templateRegions, render.dataUrl, ghostRect, true);
+    };
 
-                    {step === 1 && (
-                        <div className="flex items-center gap-4 border-l border-[#30363d] pl-4">
-                            <label className="flex items-center gap-2 text-xs cursor-pointer select-none">
-                                <input 
-                                    type="checkbox" 
-                                    checked={autoAlign}
-                                    onChange={e => setAutoAlign(e.target.checked)}
-                                    className="accent-[#1f6feb]"
-                                />
-                                <span className={autoAlign ? theme.accent : theme.textMuted}>
-                                    <Anchor size={14} className="inline mr-1"/>
-                                    Auto-Align
-                                </span>
-                            </label>
-                            <div className={`text-xs ${theme.textMuted} flex items-center gap-2`}>
-                                <MousePointer2 size={14}/> Draw boxes
+    // --- UI Theme ---
+    const theme = { bg: 'bg-[#0d1117]', sidebar: 'bg-[#161b22]', border: 'border-[#30363d]', text: 'text-[#c9d1d9]', textMuted: 'text-[#8b949e]', accent: 'text-[#58a6ff]', accentBg: 'bg-[#1f6feb]', success: 'text-[#3fb950]', buttonHover: 'hover:bg-[#21262d]', inputBg: 'bg-[#0d1117]' };
+
+    // --- Batch Wizard UI ---
+    if (isBatchMode) {
+        return (
+            <div className={`h-screen w-screen ${theme.bg} ${theme.text} flex flex-col font-sans`}>
+                 <style>{`:root, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; max-width: none !important; }`}</style>
+                <div className={`h-16 border-b ${theme.border} ${theme.sidebar} flex items-center justify-between px-6`}>
+                    <h2 className={`font-bold flex items-center gap-2 ${theme.accent}`}><Files size={20} /> Batch Crop Wizard</h2>
+                    <button onClick={() => setIsBatchMode(false)} className={`p-2 ${theme.buttonHover} rounded-md`}><X size={20} /></button>
+                </div>
+                <div className="flex-1 overflow-hidden flex">
+                    {batchStep === 0 && (
+                        <div className="flex-1 flex flex-col items-center justify-center p-10">
+                            <div className={`border-2 border-dashed ${theme.border} rounded-xl ${theme.bg} p-12 flex flex-col items-center text-center max-w-lg w-full`}>
+                                <FolderInput size={48} className={`${theme.textMuted} mb-4`} />
+                                <h3 className="text-xl font-semibold mb-2">Select PDF File(s)</h3>
+                                <p className={`${theme.textMuted} mb-6 text-sm`}>Supports multiple files.<br />Perfect for extracting signatures or specific fields.</p>
+                                <input type="file" ref={folderInputRef} className="hidden" multiple accept="application/pdf" onChange={handleFileSelect} />
+                                <button onClick={() => folderInputRef.current.click()} disabled={isPdfLoading} className={`px-6 py-3 ${theme.accentBg} hover:opacity-90 text-white rounded-md font-medium flex items-center gap-2`}>
+                                    {isPdfLoading ? <Loader2 className="animate-spin" /> : <FolderInput size={18} />} Choose Files
+                                </button>
+                            </div>
+                        </div>
+                    )}
+                    {batchStep === 1 && (
+                        <div className="flex-1 flex overflow-hidden">
+                            <div className={`w-80 ${theme.sidebar} border-r ${theme.border} flex flex-col p-4`}>
+                                <h3 className="font-semibold mb-4 text-[#e6edf3]">Crop Template</h3>
+                                <div className="mb-4">
+                                    <label className={`text-xs ${theme.textMuted} uppercase font-bold`}>Page Selection</label>
+                                    <div className="flex items-center gap-2 mt-1">
+                                        <button onClick={() => setPreviewPdfPage(p => Math.max(1, p - 1))} className={`p-1 bg-[#21262d] rounded border ${theme.border}`}><ChevronLeft size={16} /></button>
+                                        <span className="text-sm font-mono">{previewPdfPage} / {previewTotalPages}</span>
+                                        <button onClick={() => setPreviewPdfPage(p => Math.min(previewTotalPages, p + 1))} className={`p-1 bg-[#21262d] rounded border ${theme.border}`}><ChevronRight size={16} /></button>
+                                    </div>
+                                </div>
+                                <div className="mb-4 space-y-3">
+                                    <p className={`text-[10px] ${theme.textMuted} flex items-center gap-1`}><Anchor size={12} /> Auto-Alignment Active</p>
+                                    {batchPdfFiles.length === 1 && (
+                                        <div>
+                                            <label className={`text-xs ${theme.textMuted} uppercase font-bold mb-1 block`}>Pages Per Document</label>
+                                            <input type="number" min="1" value={pagesPerExam} onChange={(e) => setPagesPerExam(parseInt(e.target.value) || 1)} className={`w-full ${theme.inputBg} border ${theme.border} rounded p-2 text-sm text-[#c9d1d9] focus:border-[#58a6ff] outline-none`} />
+                                            <p className={`text-[10px] ${theme.textMuted} mt-1`}>Split single PDF into multiple docs every N pages.</p>
+                                        </div>
+                                    )}
+                                </div>
+                                <div className={`flex-1 overflow-y-auto mb-4 border ${theme.border} rounded-md ${theme.bg} p-2`}>
+                                    <p className="text-[10px] text-gray-500 mb-2">Draw boxes on the canvas...</p>
+                                    <div className="space-y-1">
+                                        {templateRegions.map((r, i) => (
+                                            <div key={i} className={`flex justify-between items-center text-xs p-2 bg-[#21262d] rounded border ${theme.border}`}>
+                                                <span className={`font-mono text-[#d29922]`}>{r.label}</span>
+                                                <button onClick={() => { const n = [...templateRegions]; n.splice(i, 1); setTemplateRegions(n); }} className="text-[#f85149]"><Trash2 size={12} /></button>
+                                            </div>
+                                        ))}
+                                    </div>
+                                </div>
+                                <button onClick={handleBatchLoadAndAlign} className={`w-full py-2 ${theme.accentBg} text-white rounded-md font-medium flex items-center justify-center gap-2`}><CheckCircle2 size={16} /> Import & Align</button>
+                            </div>
+                            <div className={`flex-1 ${theme.bg} overflow-auto flex items-center justify-center p-8 relative`}>
+                                <div className={`absolute top-4 right-4 flex gap-1 ${theme.sidebar} p-1 rounded border ${theme.border} z-20 shadow-lg`}>
+                                    <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} className={`p-1.5 ${theme.buttonHover} rounded ${theme.text}`}><ZoomOut size={16} /></button>
+                                    <span className={`text-xs font-mono flex items-center px-2 ${theme.textMuted}`}>{Math.round(scale * 100)}%</span>
+                                    <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className={`p-1.5 ${theme.buttonHover} rounded ${theme.text}`}><ZoomIn size={16} /></button>
+                                </div>
+                                <div className={`relative shadow-2xl border ${theme.border}`}>
+                                    <canvas ref={templateCanvasRef} onMouseDown={(e) => handleCanvasMouseDown(e, true)} className="cursor-crosshair block" />
+                                </div>
                             </div>
                         </div>
                     )}
                 </div>
             </div>
+        );
+    }
 
-            {/* Content Area */}
-            <div className="flex-1 overflow-hidden relative">
-                
-                {/* STEP 0: Upload */}
-                {step === 0 && (
-                    <div className="h-full flex flex-col items-center justify-center p-10 animate-fade-in">
-                        <div className={`border-2 border-dashed ${theme.border} rounded-xl ${theme.bg} p-12 flex flex-col items-center text-center max-w-lg w-full`}>
-                            <FolderInput size={48} className={`${theme.textMuted} mb-4`}/>
-                            <h3 className="text-xl font-semibold mb-2">Select Source PDFs</h3>
-                            <p className={`${theme.textMuted} mb-6 text-sm`}>
-                                Select folder containing answer sheets to extract crops locally.
-                            </p>
-                            
-                            <input 
-                                type="file" 
-                                ref={folderInputRef}
-                                className="hidden" 
-                                multiple 
-                                accept="application/pdf"
-                                onChange={handleFolderSelect}
-                                {...{ webkitdirectory: "", mozdirectory: "" }}
-                            />
-                            <button 
-                                onClick={() => folderInputRef.current.click()}
-                                disabled={isLoading}
-                                className={`px-6 py-3 ${theme.accentBg} hover:opacity-90 text-white rounded-md font-medium flex items-center gap-2 transition-all`}
-                            >
-                                {isLoading ? <Loader2 className="animate-spin"/> : <FolderInput size={18}/>}
-                                Select Folder
-                            </button>
-                        </div>
-                    </div>
-                )}
-
-                {/* STEP 1: Template Editor */}
-                {step === 1 && (
-                    <div className="h-full flex">
-                        <div className={`w-72 ${theme.sidebar} border-r ${theme.border} flex flex-col p-4 z-10`}>
-                            <h3 className="font-semibold mb-4 text-[#e6edf3] flex items-center gap-2">
-                                <ScanLine size={18} className={theme.accent}/> Template
-                            </h3>
-
-                            <div className="mb-6">
-                                <label className={`text-xs ${theme.textMuted} uppercase font-bold`}>Target Page</label>
-                                <div className="flex items-center gap-2 mt-2">
-                                    <button 
-                                        onClick={() => setPreviewPageNum(p => Math.max(1, p - 1))}
-                                        className={`p-1.5 bg-[#21262d] rounded border ${theme.border} hover:border-[#8b949e]`}
-                                    >
-                                        <ChevronLeft size={16}/>
-                                    </button>
-                                    <span className="text-sm font-mono flex-1 text-center">{previewPageNum} / {previewTotalPages}</span>
-                                    <button 
-                                        onClick={() => setPreviewPageNum(p => Math.min(previewTotalPages, p + 1))}
-                                        className={`p-1.5 bg-[#21262d] rounded border ${theme.border} hover:border-[#8b949e]`}
-                                    >
-                                        <ChevronRight size={16}/>
-                                    </button>
-                                </div>
-                            </div>
-
-                            <div className={`flex-1 overflow-y-auto mb-4 border ${theme.border} rounded-md ${theme.bg} p-2`}>
-                                {templateRegions.length === 0 ? (
-                                    <div className={`h-full flex flex-col items-center justify-center ${theme.textMuted} text-xs text-center p-4`}>
-                                        <p>No boxes defined.</p>
-                                        <p className="mt-2">Drag on the image to create answer zones.</p>
-                                    </div>
+    // --- Main UI ---
+    return (
+        <div className={`flex h-screen w-full ${theme.bg} ${theme.text} font-sans overflow-hidden`}>
+            <style>{`:root, body, #root { height: 100%; width: 100%; margin: 0; padding: 0; max-width: none !important; }`}</style>
+            
+            {/* Left Sidebar: Document List */}
+            <div className={`w-64 ${theme.sidebar} border-r ${theme.border} flex flex-col flex-shrink-0`}>
+                <div className={`p-4 border-b ${theme.border} flex items-center gap-2`}><ScanLine className="text-[#d29922]" /> <span className="font-bold text-sm">PDF Batch Cropper</span></div>
+                <div className={`p-3 border-b ${theme.border}`}>
+                    <button onClick={() => { setIsBatchMode(true); setBatchStep(0); }} className={`w-full py-2 border border-dashed ${theme.border} rounded-md ${theme.buttonHover} ${theme.accent} text-xs font-medium flex items-center justify-center gap-2 transition-colors`}><FolderInput size={16} /> New Batch</button>
+                </div>
+                <div className="flex-1 overflow-y-auto p-2 space-y-2">
+                    {pages.map((page, idx) => (
+                        <div key={page.id} onClick={() => setCurrentPageIndex(idx)} className={`p-2 rounded-md border cursor-pointer flex items-center gap-3 group transition-all ${currentPageIndex === idx ? `bg-[#21262d] border-[#58a6ff]` : `${theme.bg} ${theme.border}`}`}>
+                            {/* Show first crop as thumbnail if available, else generic icon */}
+                            <div className={`w-10 h-10 bg-[#0d1117] rounded flex items-center justify-center ${theme.textMuted} overflow-hidden flex-shrink-0 border ${theme.border}`}>
+                                {page.crops && page.crops.length > 0 ? (
+                                    <img src={page.crops[0].dataUrl} className="w-full h-full object-contain" />
                                 ) : (
-                                    <div className="space-y-1">
-                                        {templateRegions.map((r, i) => (
-                                            <div key={r.id} className={`flex justify-between items-center text-xs p-2 bg-[#21262d] rounded border ${theme.border} group`}>
-                                                <span className={`font-mono ${theme.accent} font-bold`}>{r.label}</span>
-                                                <div className="flex gap-2 text-[#8b949e]">
-                                                    <button 
-                                                        onClick={() => {
-                                                            const n = [...templateRegions];
-                                                            n.splice(i, 1);
-                                                            setTemplateRegions(n);
-                                                        }}
-                                                        className="text-[#f85149] hover:bg-[#30363d] rounded px-1 opacity-0 group-hover:opacity-100"
-                                                    >
-                                                        <Trash2 size={12}/>
-                                                    </button>
-                                                </div>
-                                            </div>
-                                        ))}
-                                    </div>
+                                    <Files size={16} />
                                 )}
                             </div>
-
-                            <button 
-                                onClick={handleGenerateDataset}
-                                className={`w-full py-3 bg-[#238636] hover:bg-[#2ea043] text-white rounded-md font-medium flex items-center justify-center gap-2 shadow-lg transition-all`}
-                            >
-                                <Download size={18}/>
-                                Generate Dataset
-                            </button>
-                            <p className={`text-[10px] ${theme.textMuted} text-center mt-2`}>
-                                Will process {pdfFiles.length} files
-                            </p>
-                        </div>
-
-                        <div className={`flex-1 ${theme.bg} overflow-auto flex items-center justify-center p-8 relative`}>
-                            <div className={`absolute top-4 right-4 flex gap-1 ${theme.sidebar} p-1 rounded border ${theme.border} z-20 shadow-lg`}>
-                                <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} className={`p-1.5 ${theme.buttonHover} rounded ${theme.text}`} title="Zoom Out"><ZoomOut size={16}/></button>
-                                <span className={`text-xs font-mono flex items-center px-2 ${theme.textMuted} select-none`}>{Math.round(scale * 100)}%</span>
-                                <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className={`p-1.5 ${theme.buttonHover} rounded ${theme.text}`} title="Zoom In"><ZoomIn size={16}/></button>
-                            </div>
-
-                            <div className={`relative shadow-2xl border ${theme.border} bg-white`}>
-                                <canvas 
-                                    ref={canvasRef}
-                                    onMouseDown={handleMouseDown}
-                                    onContextMenu={(e) => e.preventDefault()}
-                                    className="cursor-crosshair block"
-                                />
-                            </div>
-                        </div>
-                    </div>
-                )}
-
-                {/* STEP 2: Processing */}
-                {step === 2 && (
-                    <div className={`absolute inset-0 ${theme.bg} z-50 flex flex-col items-center justify-center`}>
-                        <div className={`${theme.sidebar} border ${theme.border} p-8 rounded-2xl shadow-2xl max-w-md w-full text-center`}>
-                            <div className="relative mb-6">
-                                <div className="w-16 h-16 border-4 border-[#30363d] border-t-[#58a6ff] rounded-full animate-spin mx-auto"></div>
-                                <div className="absolute inset-0 flex items-center justify-center font-bold text-xs text-[#58a6ff]">
-                                    {Math.round((progress.current / progress.total) * 100)}%
+                            <div className="flex-1 min-w-0">
+                                <div className="text-xs font-medium text-[#e6edf3] truncate">{page.originalName}</div>
+                                <div className={`text-[10px] ${theme.textMuted}`}>
+                                    {page.crops ? page.crops.length : 0} Crops ready
                                 </div>
                             </div>
-                            <h2 className="text-xl font-bold text-[#e6edf3] mb-2">Generating Dataset</h2>
-                            <p className={`${theme.textMuted} text-sm mb-6 font-mono`}>{progress.status}</p>
-                            
-                            <div className={`w-full ${theme.border} bg-[#0d1117] h-2 rounded-full overflow-hidden`}>
-                                <div 
-                                    className="h-full bg-[#238636] transition-all duration-300 ease-out" 
-                                    style={{ width: `${(progress.current / progress.total) * 100}%` }}
-                                ></div>
+                        </div>
+                    ))}
+                </div>
+                {pages.length > 0 && (
+                    <div className={`p-3 border-t ${theme.border}`}>
+                        <button onClick={handleCropExtraction} disabled={isProcessing} className="w-full py-2 bg-[#d29922] hover:opacity-90 text-black disabled:opacity-50 rounded-md font-bold flex items-center justify-center gap-2 text-sm shadow-md">
+                            {isProcessing ? <Loader2 className="animate-spin w-4 h-4" /> : <><Scissors size={16} /> Crop All Images</>}
+                        </button>
+                    </div>
+                )}
+            </div>
+
+            {/* Main Center Area: Canvas */}
+            <div className="flex-1 flex flex-col relative overflow-hidden bg-[#010409]">
+                <div className={`h-12 border-b ${theme.border} ${theme.sidebar} flex items-center justify-between px-4`}>
+                    <div className="flex items-center gap-2">
+                        <div className={`flex items-center gap-1 bg-[#21262d] rounded p-0.5 border ${theme.border}`}>
+                            <button onClick={() => handlePageNavigation('prev')} className={`p-1 ${theme.buttonHover} rounded ${theme.text}`}><ChevronLeft size={14} /></button>
+                            <input className={`w-8 bg-transparent text-center text-xs font-mono focus:outline-none ${theme.text}`} value={pageInput} onChange={(e) => { setPageInput(e.target.value); const val = parseInt(e.target.value); if (val > 0 && val <= pages.length) setCurrentPageIndex(val - 1); }} />
+                            <button onClick={() => handlePageNavigation('next')} className={`p-1 ${theme.buttonHover} rounded ${theme.text}`}><ChevronRight size={14} /></button>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        <div className={`h-6 w-px bg-[#30363d] mx-2`}></div>
+                        <button onClick={() => setScale(s => Math.max(0.5, s - 0.1))} className={`p-1.5 ${theme.buttonHover} rounded text-[#7d8590] hover:text-[#c9d1d9]`}><ZoomOut size={18} /></button>
+                        <span className={`text-xs font-mono w-10 text-center ${theme.textMuted}`}>{Math.round(scale * 100)}%</span>
+                        <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className={`p-1.5 ${theme.buttonHover} rounded text-[#7d8590] hover:text-[#c9d1d9]`}><ZoomIn size={18} /></button>
+                        <div className={`h-6 w-px bg-[#30363d] mx-2`}></div>
+                        <button onClick={handleDownloadZip} className={`p-1.5 ${theme.success} ${theme.buttonHover} rounded-md`} title="Download ZIP"><Download size={18} /></button>
+                        <button onClick={() => setShowResultsSidebar(!showResultsSidebar)} className={`p-1.5 ${theme.accent} ${theme.buttonHover} rounded-md`}><LayoutTemplate size={18} /></button>
+                    </div>
+                </div>
+                <div className="flex-1 overflow-auto flex items-center justify-center p-8 relative">
+                    <div className={`${theme.bg} shadow-2xl relative border ${theme.border}`}>
+                        <canvas ref={canvasRef} onMouseDown={(e) => handleCanvasMouseDown(e, false)} className="cursor-crosshair block" />
+                        {pages.length === 0 && (
+                            <div className={`absolute inset-0 flex flex-col items-center justify-center ${theme.textMuted} pointer-events-none`}><ScanLine size={48} className="mb-4 opacity-20" /><p>Start a New Batch</p></div>
+                        )}
+                    </div>
+                </div>
+                {/* Processing Overlay */}
+                {isProcessing && (
+                    <div className={`absolute inset-0 ${theme.bg}/80 z-50 flex items-center justify-center backdrop-blur-sm`}>
+                        <div className={`${theme.sidebar} border ${theme.border} p-6 rounded-xl shadow-2xl max-w-sm w-full text-center`}>
+                            <Loader2 size={32} className={`animate-spin ${theme.accent} mx-auto mb-4`} />
+                            <h3 className="text-[#e6edf3] font-medium mb-1">{progress.status}</h3>
+                            <div className={`w-full ${theme.border} h-1.5 rounded-full overflow-hidden mt-3 bg-gray-700`}>
+                                <div className="h-full bg-[#d29922] transition-all duration-300" style={{ width: `${(progress.current / progress.total) * 100}%` }}></div>
                             </div>
-                            <p className={`text-xs ${theme.textMuted} mt-4`}>
-                                {progress.current} / {progress.total} files processed
-                            </p>
+                            <p className={`text-xs ${theme.textMuted} mt-2`}>{progress.current} / {progress.total} items</p>
                         </div>
                     </div>
                 )}
             </div>
 
-            {toast && (
-                <div className={`fixed bottom-6 right-6 px-4 py-3 rounded-md shadow-lg text-white text-sm font-medium z-50 flex items-center gap-3 animate-fade-in-up border ${theme.border}
-                    ${toast.type === 'error' ? 'bg-[#da3633]' : 'bg-[#1f6feb]'}
-                `}>
-                    {toast.type === 'error' ? <X size={16}/> : <CheckCircle2 size={16}/>}
-                    {toast.msg}
+            {/* Right Sidebar: Crop Results Preview */}
+            {showResultsSidebar && (
+                <div className={`w-72 ${theme.sidebar} border-l ${theme.border} flex flex-col flex-shrink-0 z-20`}>
+                    <div className={`p-4 border-b ${theme.border} flex justify-between items-center`}>
+                        <h3 className="font-bold text-[#e6edf3] flex items-center gap-2"><ImageIcon size={18} /> Crop Results</h3>
+                    </div>
+                    <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                        {pages[currentPageIndex]?.crops && pages[currentPageIndex].crops.length > 0 ? (
+                            pages[currentPageIndex].crops.map((crop, idx) => (
+                                <div key={idx} className={`space-y-2`}>
+                                    <div className={`text-xs ${theme.textMuted} font-mono mb-1`}>{crop.label}</div>
+                                    <div className={`bg-[url('data:image/svg+xml;base64,PHN2ZyB4bWxucz0iaHR0cDovL3d3dy53My5vcmcvMjAwMC9zdmciIHdpZHRoPSI4IiBoZWlnaHQ9IjgiPgo8cmVjdCB3aWR0aD0iOCIgaGVpZ2h0PSI4IiBmaWxsPSIjMGMxMTE3Ii8+CjxyZWN0IHdpZHRoPSI0IiBoZWlnaHQ9IjQiIGZpbGw9IiMxNjFiMjIiLz4KPHJlY3QgeD0iNCIgeT0iNCIgd2lkdGg9IjQiIGhlaWdodD0iNCIgZmlsbD0iIzE2MWIyMiIvPgo8L3N2Zz4=')] border ${theme.border} rounded-md overflow-hidden`}>
+                                        <img src={crop.dataUrl} className="w-full h-auto block" alt={crop.label} />
+                                    </div>
+                                </div>
+                            ))
+                        ) : (
+                            <div className={`text-center ${theme.textMuted} py-10 text-xs flex flex-col items-center gap-2`}>
+                                <Layers size={24} className="opacity-20" />
+                                <p>No crops yet.<br/>Click "Crop All Images" to extract.</p>
+                            </div>
+                        )}
+                    </div>
+                    {pages.some(p => p.crops && p.crops.length > 0) && (
+                         <div className={`p-4 border-t ${theme.border}`}>
+                             <button onClick={handleDownloadZip} className={`w-full py-2 ${theme.success} border border-[#238636] hover:bg-[#238636]/10 rounded-md font-medium text-xs flex items-center justify-center gap-2`}>
+                                 <Download size={14} /> Download ZIP
+                             </button>
+                         </div>
+                    )}
                 </div>
             )}
+            
+            {/* Toast Notification */}
+            {toast && (<div className={`fixed bottom-6 right-6 px-4 py-3 rounded-md shadow-lg text-white text-xs font-medium z-50 flex items-center gap-3 animate-fade-in-up ${toast.type === 'error' ? 'bg-[#da3633]' : 'bg-[#238636]'}`}>{toast.type === 'error' ? <X size={14} /> : <CheckCircle2 size={14} />}{toast.message}</div>)}
         </div>
     );
 };
 
-export default TrainingApp;
+export default App;
