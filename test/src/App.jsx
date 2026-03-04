@@ -68,7 +68,7 @@ const App = () => {
     const [isBatchMode, setIsBatchMode] = useState(false);
     const [batchStep, setBatchStep] = useState(0); 
     const [batchPdfFiles, setBatchPdfFiles] = useState([]);
-    const [processedFullPdfs, setProcessedFullPdfs] = useState([]); // Store full PDFs with added pages
+    const processedFullPdfsRef = useRef([]); // Store full PDFs with added pages - use useRef to avoid holding in state
     const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
     const [previewPdfPage, setPreviewPdfPage] = useState(1);
     const [previewTotalPages, setPreviewTotalPages] = useState(1);
@@ -100,7 +100,14 @@ const App = () => {
             canvas.width = viewport.width;
             ctx.fillStyle = '#FFFFFF';
             ctx.fillRect(0, 0, canvas.width, canvas.height);
-            await page.render({ canvasContext: ctx, viewport }).promise;
+            
+            // Store render task and await it
+            const renderTask = page.render({ canvasContext: ctx, viewport });
+            await renderTask.promise;
+            
+            // Explicitly cleanup PDF.js page resources after rendering
+            page.cleanup();
+            
             return { canvas, width: viewport.width, height: viewport.height };
         } catch (e) {
             console.error("Render error:", e);
@@ -179,15 +186,23 @@ const App = () => {
                     finalBytes = await pdfDoc.save();
                 }
                 
-                fullPdfsToDownload.push({ name: item.file.name, bytes: finalBytes });
-                const readyDoc = await pdfjs.getDocument({ data: new Uint8Array(finalBytes) }).promise;
-                finalDocs.push({ doc: readyDoc, name: item.file.name, pageCount: maxPages });
+            fullPdfsToDownload.push({ name: item.file.name, bytes: finalBytes });
+            // Store raw bytes instead of PDF.js document to save memory
+            finalDocs.push({ bytes: new Uint8Array(finalBytes), name: item.file.name, pageCount: maxPages });
+            
+            // Only load preview doc for the first file
+            if (finalDocs.length === 1) {
+                const previewDoc = await pdfjs.getDocument({ data: new Uint8Array(finalBytes) }).promise;
+                setPreviewPdfDoc(previewDoc);
             }
+            
+            // Free original buffer after processing to save memory
+            item.buffer = null;
+        }
 
-            setBatchPdfFiles(finalDocs);
-            setProcessedFullPdfs(fullPdfsToDownload);
-            setPreviewPdfDoc(finalDocs[0].doc);
-            setPreviewTotalPages(maxPages);
+        setBatchPdfFiles(finalDocs);
+        processedFullPdfsRef.current = fullPdfsToDownload;
+        setPreviewTotalPages(maxPages);
             setIsBatchMode(true);
             setBatchStep(1);
             showToast(`Loaded ${files.length} files.`);
@@ -200,21 +215,26 @@ const App = () => {
     };
 
     const downloadProcessedPdfsZip = async () => {
-        if (processedFullPdfs.length === 0) return;
+        if (processedFullPdfsRef.current.length === 0) return;
         setIsProcessing(true);
         try {
             const JSZip = await loadJsZipLib();
             const zip = new JSZip();
-            processedFullPdfs.forEach(f => {
+            processedFullPdfsRef.current.forEach(f => {
                 zip.file(f.name, f.bytes);
             });
             const blob = await zip.generateAsync({type: "blob"});
+            const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
+            link.href = url;
             link.download = "processed_pdfs.zip";
             link.click();
+            // Revoke object URL to free memory
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
+            // Clear the ref to free memory after download
+            processedFullPdfsRef.current = [];
             showToast("ZIP downloaded successfully.");
-        } catch (e) {
+        } catch {
             showToast("Zip generation failed.");
         } finally {
             setIsProcessing(false);
@@ -227,6 +247,7 @@ const App = () => {
         
         let worker = null;
         try {
+            const pdfjs = await loadPdfLib();
             await loadTesseractLib();
             const JSZip = await loadJsZipLib();
             const { PDFDocument } = await loadPdfManipLib();
@@ -237,17 +258,29 @@ const App = () => {
             const pagesToExtract = [...new Set(templateRegions.map(r => r.page))].sort((a,b) => a-b);
             const anchorMap = {}; 
 
-            const regionPdfs = {};
+            // Store cropped images as base64 strings instead of PDF documents
+            // This prevents pdf-lib from caching images indefinitely
+            const croppedImagesByRegion = {};
             for (let i = 0; i < templateRegions.length; i++) {
-                regionPdfs[i] = await PDFDocument.create();
+                croppedImagesByRegion[i] = [];
             }
 
             for (const pNum of pagesToExtract) {
-                const { canvas } = await renderPdfToCanvas(previewPdfDoc, pNum);
+                // Use lower scale for OCR-only canvases to reduce memory usage
+                const { canvas } = await renderPdfToCanvas(previewPdfDoc, pNum, 1.5);
                 anchorMap[pNum] = await findUniqueAnchor(worker, canvas);
+                // Clean up anchor canvas to free memory
+                const ctx = canvas.getContext('2d');
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
+                canvas.width = 0;
+                canvas.height = 0;
+                canvas.remove();
             }
 
             for (const item of batchPdfFiles) {
+                // Load PDF.js document just-in-time to avoid holding multiple docs in memory
+                const currentDoc = await pdfjs.getDocument({ data: item.bytes }).promise;
+                
                 const baseName = item.name.replace(/\.[^/.]+$/, ""); 
                 const lastTwoDigitsMatch = baseName.match(/(\d{2})$/);
                 const classNumber = lastTwoDigitsMatch ? parseInt(lastTwoDigitsMatch[1]) : null;
@@ -265,7 +298,7 @@ const App = () => {
 
                     if (applicableRegions.length === 0) continue;
 
-                    const render = await renderPdfToCanvas(item.doc, pNum);
+                    const render = await renderPdfToCanvas(currentDoc, pNum);
                     let offX = 0, offY = 0;
                     
                     if (anchorMap[pNum]) {
@@ -288,42 +321,81 @@ const App = () => {
                         const ctx = c.getContext('2d');
                         ctx.drawImage(render.canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
                         
-                        const imgBytes = await new Promise(resolve => {
-                            c.toBlob(blob => blob.arrayBuffer().then(resolve), 'image/jpeg', 0.9);
-                        });
-
-                        const pdfDoc = regionPdfs[r.idx];
-                        const image = await pdfDoc.embedJpg(imgBytes);
+                        // Extract Base64 directly instead of Blob -> ArrayBuffer
+                        // Store in array to defer PDF creation until the end
+                        const base64Data = c.toDataURL('image/jpeg', 0.9);
                         
-                        const page = pdfDoc.addPage([cropW * 0.5, cropH * 0.5]);
-                        page.drawImage(image, {
-                            x: 0,
-                            y: 0,
+                        // IMMEDIATELY destroy temporary canvas
+                        ctx.clearRect(0, 0, c.width, c.height);
+                        c.width = 0;
+                        c.height = 0;
+                        c.remove();
+                        
+                        // Store image data in array instead of embedding into PDF immediately
+                        croppedImagesByRegion[r.idx].push({
+                            base64: base64Data,
                             width: cropW * 0.5,
-                            height: cropH * 0.5,
+                            height: cropH * 0.5
                         });
                     }
+                    
+                    // Clean up render canvas after processing all regions on this page
+                    const renderCtx = render.canvas.getContext('2d');
+                    renderCtx.clearRect(0, 0, render.canvas.width, render.canvas.height);
+                    render.canvas.width = 0;
+                    render.canvas.height = 0;
+                    render.canvas.remove();
+                    render.canvas = null; // Break reference to signal GC
                 }
+                
+                // VERY IMPORTANT: Destroy the PDF.js document object after finishing the file
+                // This releases all internal caches, fonts, and page references
+                currentDoc.destroy();
+                
+                // Force a short pause to allow Garbage Collector to clean up
+                // This prevents memory from accumulating across multiple PDFs
+                await new Promise(resolve => setTimeout(resolve, 10));
             }
             
-            for (let i = 0; i < templateRegions.length; i++) {
-                const pdfBytes = await regionPdfs[i].save();
-                const fileName = `Q${i + 1}_${templateRegions[i].label}.pdf`;
+            // Build PDFs only at the end using stored base64 strings
+            // This prevents pdf-lib from caching images during the entire batch process
+            for (let idx = 0; idx < templateRegions.length; idx++) {
+                const pdfDoc = await PDFDocument.create();
+                
+                for (const imgData of croppedImagesByRegion[idx]) {
+                    const image = await pdfDoc.embedJpg(imgData.base64);
+                    const page = pdfDoc.addPage([imgData.width, imgData.height]);
+                    page.drawImage(image, {
+                        x: 0,
+                        y: 0,
+                        width: imgData.width,
+                        height: imgData.height
+                    });
+                }
+                
+                const pdfBytes = await pdfDoc.save();
+                const fileName = `Q${idx + 1}_${templateRegions[idx].label}.pdf`;
                 zip.file(fileName, pdfBytes);
+                
+                // Clear array to free memory as we go
+                croppedImagesByRegion[idx] = null;
             }
             
             const blob = await zip.generateAsync({type: "blob"});
+            const url = URL.createObjectURL(blob);
             const link = document.createElement('a');
-            link.href = URL.createObjectURL(blob);
+            link.href = url;
             link.download = "batch_questions_pdfs.zip";
             link.click();
+            // Revoke object URL to free memory
+            setTimeout(() => URL.revokeObjectURL(url), 1000);
 
             showToast("Success! ZIP downloaded.");
             setIsBatchMode(false);
             setBatchStep(0);
-        } catch (e) {
-            console.error(e);
-            showToast("Processing failed.");
+        } catch {
+            console.error("Zip generation failed.");
+            showToast("Zip generation failed.");
         } finally {
             if (worker) await worker.terminate();
             setIsProcessing(false);
@@ -331,7 +403,9 @@ const App = () => {
     };
 
     const findUniqueAnchor = async (worker, canvas) => {
-        const { data: { words } } = await worker.recognize(canvas);
+        // Pass base64 string instead of canvas to prevent WebAssembly memory leaks
+        const base64 = canvas.toDataURL('image/jpeg', 0.5);
+        const { data: { words } } = await worker.recognize(base64);
         const counts = {}, positions = {};
         words.forEach(w => {
             const t = w.text.trim().toLowerCase();
@@ -345,7 +419,9 @@ const App = () => {
     };
 
     const findWordPosition = async (worker, canvas, target) => {
-        const { data: { words } } = await worker.recognize(canvas);
+        // Pass base64 string instead of canvas to prevent WebAssembly memory leaks
+        const base64 = canvas.toDataURL('image/jpeg', 0.5);
+        const { data: { words } } = await worker.recognize(base64);
         const match = words.find(w => w.text.toLowerCase().includes(target.toLowerCase()));
         return match ? { x: match.bbox.x0, y: match.bbox.y0 } : null;
     };
@@ -366,15 +442,15 @@ const App = () => {
         ctx.scale(scale, scale);
         ctx.drawImage(pdfCanvas, 0, 0);
         
-        templateRegions.filter(r => r.page === previewPdfPage).forEach((r, i) => {
-            const regionIndex = templateRegions.indexOf(r);
-            ctx.strokeStyle = '#d29922'; 
-            ctx.lineWidth = 3 / scale; // Keep stroke thickness visually consistent
-            ctx.strokeRect(r.x, r.y, r.width, r.height);
-            ctx.fillStyle = '#d29922';
-            ctx.font = `bold ${12 / scale}px sans-serif`;
-            ctx.fillText(`Q${regionIndex + 1}: ${r.label}`, r.x, r.y - (5 / scale));
-        });
+            templateRegions.filter(r => r.page === previewPdfPage).forEach((r) => {
+                const regionIndex = templateRegions.indexOf(r);
+                ctx.strokeStyle = '#d29922'; 
+                ctx.lineWidth = 3 / scale; // Keep stroke thickness visually consistent
+                ctx.strokeRect(r.x, r.y, r.width, r.height);
+                ctx.fillStyle = '#d29922';
+                ctx.font = `bold ${12 / scale}px sans-serif`;
+                ctx.fillText(`Q${regionIndex + 1}: ${r.label}`, r.x, r.y - (5 / scale));
+            });
         
         if (ghost) { 
             ctx.strokeStyle = '#58a6ff'; 
@@ -383,6 +459,13 @@ const App = () => {
             ctx.strokeRect(ghost.x, ghost.y, ghost.w, ghost.h); 
         }
         ctx.restore();
+        
+        // Clean up off-screen render canvas to free memory
+        const pdfCtx = pdfCanvas.getContext('2d');
+        pdfCtx.clearRect(0, 0, pdfCanvas.width, pdfCanvas.height);
+        pdfCanvas.width = 0;
+        pdfCanvas.height = 0;
+        pdfCanvas.remove();
     };
 
     const startDrag = (e) => {
@@ -454,7 +537,7 @@ const App = () => {
                             </div>
                         </div>
 
-                        {processedFullPdfs.length > 0 && (
+                        {processedFullPdfsRef.current.length > 0 && (
                             <div className="mb-6 p-3 bg-[#1f6feb]/10 border border-[#1f6feb]/30 rounded-lg">
                                 <h3 className="text-[10px] font-bold text-[#58a6ff] uppercase tracking-wider mb-2">Padded Documents</h3>
                                 <p className="text-[10px] text-gray-400 mb-3 leading-tight">All documents have been unified to {previewTotalPages} pages. You can download the full processed files below.</p>
@@ -496,8 +579,8 @@ const App = () => {
                         </button>
                     </div>
                     {/* Centered Scrollable Canvas Container */}
-                    <div className="flex-1 bg-[#010409] overflow-auto flex items-start justify-center p-10 bg-[radial-gradient(#30363d_1px,transparent_1px)] bg-[size:20px_20px]">
-                        <div className="flex-shrink-0 relative">
+                    <div className="flex-1 bg-[#010409] overflow-auto flex items-start p-10 bg-[radial-gradient(#30363d_1px,transparent_1px)] bg-[size:20px_20px]">
+                        <div className="flex-shrink-0 relative mx-auto">
                             <canvas 
                                 ref={templateCanvasRef} 
                                 onMouseDown={startDrag} 
