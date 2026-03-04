@@ -700,16 +700,6 @@ const App = () => {
                             pageResults[region.id] = regionResults;
                         }
                     });
-                    const keyCount = Object.keys(parsedAnswerKey).length;
-                    if (keyCount > 0) {
-                        Object.keys(pageResults).forEach(key => {
-                            if (key.includes('_b1') || key.includes('_b2')) pageResults[key] = pageResults[key].filter(r => r.qNum <= keyCount);
-                        });
-                    } else {
-                        // Use the configured question count when no answer key is provided
-                        const answerKeys = Object.keys(pageResults).filter(k => k.includes('_b1') || k.includes('_b2'));
-                        answerKeys.forEach(k => { pageResults[k] = pageResults[k].filter(r => r.qNum <= questionCount); });
-                    }
                     resolve(pageResults);
                 };
                 img.src = imgSrc;
@@ -721,6 +711,62 @@ const App = () => {
             const results = await processSinglePage(newPages[i].imageUrl, newPages[i]);
             newPages[i] = { ...newPages[i], results: results };
         }
+
+        // Apply filtering based on answer key or auto-detect cutoff
+        const keyCount = Object.keys(parsedAnswerKey).length;
+        if (keyCount > 0) {
+            // Use answer key length
+            newPages.forEach(page => {
+                Object.keys(page.results).forEach(key => {
+                    if (key.includes('_b1') || key.includes('_b2')) page.results[key] = page.results[key].filter(r => r.qNum <= keyCount);
+                });
+            });
+        } else {
+            // Auto-detect cutoff: Find first question with >50% blanks
+            const allAnswers = {}; // qNum -> { blanks: 0, total: 0 }
+            
+            // Collect statistics across all pages
+            newPages.forEach(page => {
+                Object.keys(page.results).forEach(key => {
+                    if (key.includes('_b1') || key.includes('_b2')) {
+                        page.results[key].forEach(r => {
+                            if (!allAnswers[r.qNum]) {
+                                allAnswers[r.qNum] = { blanks: 0, total: 0 };
+                            }
+                            allAnswers[r.qNum].total++;
+                            if (r.label === 'BLANK') {
+                                allAnswers[r.qNum].blanks++;
+                            }
+                        });
+                    }
+                });
+            });
+
+            // Find first question with >50% blanks
+            let cutoffQuestion = -1;
+            const sortedQNums = Object.keys(allAnswers).map(Number).sort((a, b) => a - b);
+            
+            for (const qNum of sortedQNums) {
+                const stats = allAnswers[qNum];
+                const blankPercentage = stats.blanks / stats.total;
+                if (blankPercentage > 0.5) {
+                    cutoffQuestion = qNum;
+                    break;
+                }
+            }
+
+            // Apply filtering
+            if (cutoffQuestion !== -1) {
+                newPages.forEach(page => {
+                    Object.keys(page.results).forEach(key => {
+                        if (key.includes('_b1') || key.includes('_b2')) {
+                            page.results[key] = page.results[key].filter(r => r.qNum < cutoffQuestion);
+                        }
+                    });
+                });
+            }
+        }
+
         setPages(newPages);
         setIsProcessing(false);
         setShowResults(true);
