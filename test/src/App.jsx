@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import {
     Trash2, ChevronRight, ChevronLeft, 
     ZoomIn, ZoomOut, X, Loader2, FolderInput, 
-    Files, Scissors, Download, FilePlus, ScanLine, AlertCircle, Filter, Hash, FileUp
+    Files, Scissors, Download, FilePlus, ScanLine, AlertCircle, Filter, Hash, FileUp, GitBranch, FileSpreadsheet
 } from 'lucide-react';
 
 // --- External Libraries ---
@@ -433,7 +433,11 @@ const App = () => {
             <div className={`h-screen w-screen ${theme.bg} ${theme.text} flex flex-col font-sans`}>
                 <div className={`h-14 border-b ${theme.border} ${theme.sidebar} flex items-center justify-between px-6`}>
                     <div className="flex items-center gap-2 font-bold text-[#58a6ff]"><FilePlus size={20}/> Batch Workflow</div>
-                    <button onClick={() => { setIsBatchMode(false); setBatchStep(0); }} className="hover:text-white transition-colors"><X/></button>
+                    <div className="flex items-center gap-3">
+                        <a href="/beta/" target="_self" rel="noopener noreferrer" className="p-2 rounded-lg hover:bg-blue-500/10 transition-all duration-200" title="Beta Version"><FileSpreadsheet size={24} className="text-[#58a6ff] drop-shadow-md" /></a>
+                        <a href="/" target="_self" rel="noopener noreferrer" className="p-2 rounded-lg hover:bg-blue-500/10 transition-all duration-200" title="Main Version"><GitBranch size={24} className="text-[#58a6ff] drop-shadow-md" /></a>
+                        <button onClick={() => { setIsBatchMode(false); setBatchStep(0); }} className="hover:text-white transition-colors"><X/></button>
+                    </div>
                 </div>
                 <div className="flex-1 flex overflow-hidden">
                     <div className={`w-80 ${theme.sidebar} border-r ${theme.border} p-5 flex flex-col`}>

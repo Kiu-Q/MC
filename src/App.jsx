@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Upload, FileSpreadsheet, Plus, Trash2, CheckCircle2, ScanSearch, Settings, ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut, LayoutTemplate, ChevronLeft, Layers, ScanLine, GraduationCap, Hash, UserSquare2, X, Loader2, RotateCw, Menu, HelpCircle } from 'lucide-react';
+import { Upload, FileSpreadsheet, Plus, Trash2, CheckCircle2, ScanSearch, Settings, ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut, LayoutTemplate, ChevronLeft, Layers, ScanLine, GraduationCap, Hash, UserSquare2, X, Loader2, RotateCw, Menu, GitBranch, Camera, FileText ,Signature} from 'lucide-react';
 
 const App = () => {
     // State for multiple pages
@@ -1040,15 +1040,26 @@ const App = () => {
                         </h1>
                         <p className="text-xs text-[#7d8590] mt-1">Specialized for Ho Fung College</p>
                     </div>
-                    <a 
-                        href="https://github.com/Kiu-Q/MC" // Placeholder
-                        target="_blank" 
-                        rel="noopener noreferrer"
-                        className="text-slate-500 hover:text-blue-400 transition-colors"
-                        title="Documentation"
-                    >
-                        <HelpCircle className="w-5 h-5" />
-                    </a>
+                    <div className="flex gap-3">
+                        <a 
+                            href="/beta/"
+                            target="_self" 
+                            rel="noopener noreferrer"
+                            className="p-2 rounded-lg hover:bg-blue-500/10 transition-all duration-200"
+                            title="PDF Multi-Cropper"
+                        >
+                            <Signature className="w-8 h-8 text-[#58a6ff] drop-shadow-md" />
+                        </a>
+                        <a 
+                            href="/test/"
+                            target="_self" 
+                            rel="noopener noreferrer"
+                            className="p-2 rounded-lg hover:bg-blue-500/10 transition-all duration-200"
+                            title="Handwritten MC Scanner"
+                        >
+                            <FileText className="w-8 h-8 text-[#58a6ff] drop-shadow-md" />
+                        </a>
+                    </div>
                 </div>
 
                 <div className="flex-1 overflow-y-auto p-4 space-y-6">

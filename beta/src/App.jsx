@@ -3,7 +3,7 @@ import {
     FileSpreadsheet, Trash2, CheckCircle2,
     ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut,
     LayoutTemplate, ChevronLeft, ScanLine, GraduationCap, Hash,
-    X, Loader2, FolderInput, Files, BrainCircuit, Anchor, Search, FileText, HelpCircle
+    X, Loader2, FolderInput, Files, BrainCircuit, Anchor, Search, FileText, GitBranch, Camera
 } from 'lucide-react';
 
 // --- External Libraries (Dynamic Load) ---
@@ -689,6 +689,59 @@ const App = () => {
                 }
             }
             setPages(updatedPages);
+            
+            // Auto-detect cutoff: Find first question with >50% EMPTY (no answer key)
+            if (Object.keys(parsedAnswerKey).length === 0) {
+                const allAnswers = {}; // qLabel -> { empty: 0, total: 0 }
+                
+                // Collect statistics across all pages
+                updatedPages.forEach(page => {
+                    if (page.results) {
+                        Object.entries(page.results).forEach(([qLabel, res]) => {
+                            if (!allAnswers[qLabel]) {
+                                allAnswers[qLabel] = { empty: 0, total: 0 };
+                            }
+                            allAnswers[qLabel].total++;
+                            if (res.label === 'EMPTY') {
+                                allAnswers[qLabel].empty++;
+                            }
+                        });
+                    }
+                });
+
+                // Find first question with >50% EMPTY
+                let cutoffLabel = null;
+                const sortedLabels = Object.keys(allAnswers).sort((a, b) => {
+                    const nA = parseInt(a.replace(/\D/g, '')) || 0;
+                    const nB = parseInt(b.replace(/\D/g, '')) || 0;
+                    return nA - nB;
+                });
+                
+                for (const label of sortedLabels) {
+                    const stats = allAnswers[label];
+                    const emptyPercentage = stats.empty / stats.total;
+                    if (emptyPercentage > 0.5) {
+                        cutoffLabel = label;
+                        break;
+                    }
+                }
+
+                // Apply filtering
+                if (cutoffLabel) {
+                    const cutoffNum = parseInt(cutoffLabel.replace(/\D/g, '')) || 0;
+                    updatedPages.forEach(page => {
+                        if (page.results) {
+                            Object.keys(page.results).forEach(key => {
+                                const qNum = parseInt(key.replace(/\D/g, '')) || 0;
+                                if (qNum >= cutoffNum) {
+                                    delete page.results[key];
+                                }
+                            });
+                        }
+                    });
+                }
+            }
+            
             showToast("AI Scanning Complete!", "success");
         } catch (e) {
             console.error(e);
@@ -852,8 +905,9 @@ const App = () => {
                         <span className={`text-xs font-mono w-10 text-center ${theme.textMuted}`}>{Math.round(scale * 100)}%</span>
                         <button onClick={() => setScale(s => Math.min(3, s + 0.1))} className={`p-1.5 ${theme.buttonHover} rounded text-[#7d8590] hover:text-[#c9d1d9]`}><ZoomIn size={18} /></button>
                         <div className={`h-6 w-px bg-[#30363d] mx-2`}></div>
-                        <a href="https://github.com/Kiu-Q/MC" target="_blank" rel="noreferrer" className={`p-1.5 ${theme.textMuted} hover:${theme.text} ${theme.buttonHover} rounded-md`}><HelpCircle size={18} /></a>
+                        <a href="/" target="_self" rel="noopener noreferrer" className={`p-2 rounded-lg hover:bg-blue-500/10 transition-all duration-200`} title="Switch to Main Version"><GitBranch size={24} className="text-[#58a6ff] drop-shadow-md" /></a>
                         <button onClick={() => setIsMarksSettingsOpen(true)} className={`p-1.5 ${theme.textMuted} hover:${theme.text} ${theme.buttonHover} rounded-md`} title="Weighting"><Hash size={18} /></button>
+                        <a href="/test/" target="_self" rel="noopener noreferrer" className={`p-2 rounded-lg hover:bg-blue-500/10 transition-all duration-200`} title="Test Version"><ScanLine size={24} className="text-[#58a6ff] drop-shadow-md" /></a>
                         <button onClick={handleExportExcel} className={`p-1.5 ${theme.success} ${theme.buttonHover} rounded-md`} title="Export"><Download size={18} /></button>
                         <button onClick={() => setShowResultsSidebar(!showResultsSidebar)} className={`p-1.5 ${theme.accent} ${theme.buttonHover} rounded-md`}><LayoutTemplate size={18} /></button>
                     </div>
