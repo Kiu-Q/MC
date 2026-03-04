@@ -135,7 +135,7 @@ const App = () => {
                 setCurrentPageIndex(p => Math.min(pages.length - 1, p + 1));
             }
         };
-
+ 
         window.addEventListener('keydown', handleKeyDown);
         return () => window.removeEventListener('keydown', handleKeyDown);
     }, [pages, isProcessing, showResults]);
