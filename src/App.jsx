@@ -17,6 +17,7 @@ const App = () => {
     // Grading State
     const [answerKeyInput, setAnswerKeyInput] = useState("");
     const [parsedAnswerKey, setParsedAnswerKey] = useState({});
+    const [questionCount, setQuestionCount] = useState(45); // Default 45 questions when no answer key
 
     // Marks State (Batch Sections)
     const [isMarksSettingsOpen, setIsMarksSettingsOpen] = useState(false);
@@ -694,12 +695,9 @@ const App = () => {
                             if (key.includes('_b1') || key.includes('_b2')) pageResults[key] = pageResults[key].filter(r => r.qNum <= keyCount);
                         });
                     } else {
+                        // Use the configured question count when no answer key is provided
                         const answerKeys = Object.keys(pageResults).filter(k => k.includes('_b1') || k.includes('_b2'));
-                        let maxAnsweredQ = 0;
-                        answerKeys.forEach(k => {
-                            pageResults[k].forEach(r => { if (r.label !== 'BLANK') if (r.qNum > maxAnsweredQ) maxAnsweredQ = r.qNum; });
-                        });
-                        answerKeys.forEach(k => { pageResults[k] = pageResults[k].filter(r => r.qNum <= maxAnsweredQ); });
+                        answerKeys.forEach(k => { pageResults[k] = pageResults[k].filter(r => r.qNum <= questionCount); });
                     }
                     resolve(pageResults);
                 };
@@ -1020,6 +1018,23 @@ const App = () => {
                         </label>
                         <textarea placeholder="Paste answers (e.g. '1.A 2.B', 'ABCDA')" className="w-full h-24 p-2 text-sm border border-[#30363d] rounded bg-[#0d1117] text-[#e6edf3] focus:bg-[#161b22] transition-colors outline-none font-mono placeholder-[#7d8590]" value={answerKeyInput} onChange={(e) => setAnswerKeyInput(e.target.value)} />
                         <div className="text-xs text-[#7d8590]">Found {Object.keys(parsedAnswerKey).length} answers.</div>
+                        <div className="flex items-center gap-2">
+                            <span className="text-xs text-[#7d8590]">Questions to check:</span>
+                            <input 
+                                type="number" 
+                                min="1" 
+                                max="60"
+                                className="w-16 p-1 text-xs border border-[#30363d] rounded bg-[#0d1117] text-[#e6edf3] focus:border-[#58a6ff] outline-none transition-colors text-center"
+                                value={questionCount}
+                                onChange={(e) => {
+                                    const val = parseInt(e.target.value);
+                                    if (!isNaN(val) && val > 0) {
+                                        setQuestionCount(val);
+                                    }
+                                }}
+                            />
+                            <span className="text-xs text-[#7d8590]">(used when no answer key)</span>
+                        </div>
                     </div>
 
                     {/* 3. Weights */}
