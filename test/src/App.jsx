@@ -59,6 +59,150 @@ const loadJsZipLib = async () => {
     });
 };
 
+// --- Helper Functions ---
+
+// Clean up canvas to free memory
+const cleanupCanvas = (canvas) => {
+    if (!canvas) return;
+    const ctx = canvas.getContext('2d');
+    ctx.clearRect(0, 0, canvas.width, canvas.height);
+    canvas.width = 0;
+    canvas.height = 0;
+    canvas.remove();
+};
+
+// Render PDF page to canvas
+const renderPdfToCanvas = async (pdfDoc, pageNum, renderScale = 2.0) => {
+    try {
+        const page = await pdfDoc.getPage(pageNum);
+        const viewport = page.getViewport({ scale: renderScale });
+        const canvas = document.createElement('canvas');
+        const ctx = canvas.getContext('2d');
+        canvas.height = viewport.height;
+        canvas.width = viewport.width;
+        ctx.fillStyle = '#FFFFFF';
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
+        
+        const renderTask = page.render({ canvasContext: ctx, viewport });
+        await renderTask.promise;
+        
+        page.cleanup();
+        
+        return { canvas, width: viewport.width, height: viewport.height };
+    } catch (e) {
+        console.error("Render error:", e);
+        throw e;
+    }
+};
+
+// OCR a page and extract word data for anchor detection
+const ocrPageForAnchors = async (worker, canvas) => {
+    const base64 = canvas.toDataURL('image/jpeg', 0.5);
+    const { data: { words } } = await worker.recognize(base64);
+    
+    const counts = {};
+    const positions = {};
+    
+    words.forEach(w => {
+        const text = w.text.trim().toLowerCase();
+        if (text.length > 4 && w.confidence > 80) {
+            counts[text] = (counts[text] || 0) + 1;
+            if (!positions[text]) {
+                positions[text] = { x: w.bbox.x0, y: w.bbox.y0 };
+            }
+        }
+    });
+    
+    return { words, counts, positions };
+};
+
+// Find universal anchor across all documents
+const findUniversalAnchor = (perDocWordData) => {
+    if (perDocWordData.length === 0) return null;
+    
+    // Get unique words from each document
+    const uniqueSets = perDocWordData.map(doc => {
+        const uniques = new Set();
+        for (const [word, count] of Object.entries(doc.counts)) {
+            if (count === 1) uniques.add(word);
+        }
+        return uniques;
+    });
+    
+    // Find intersection - words that are unique in ALL documents
+    const firstSet = uniqueSets[0];
+    const universalUniques = uniqueSets.slice(1).reduce(
+        (intersection, set) => {
+            return new Set([...intersection].filter(word => set.has(word)));
+        },
+        firstSet
+    );
+    
+    if (universalUniques.size === 0) return null;
+    
+    // Score candidates by position variance
+    const candidates = [];
+    for (const word of universalUniques) {
+        const positions = perDocWordData.map(doc => doc.positions[word]);
+        const confidences = perDocWordData.map(doc => {
+            const match = doc.words.find(w => w.text.trim().toLowerCase() === word);
+            return match ? match.confidence : 0;
+        });
+        
+        // Calculate position variance (lower is better)
+        const avgX = positions.reduce((sum, p) => sum + p.x, 0) / positions.length;
+        const avgY = positions.reduce((sum, p) => sum + p.y, 0) / positions.length;
+        const variance = positions.reduce((sum, p) => 
+            sum + Math.pow(p.x - avgX, 2) + Math.pow(p.y - avgY, 2), 0
+        ) / positions.length;
+        
+        // Average confidence
+        const avgConfidence = confidences.reduce((sum, c) => sum + c, 0) / confidences.length;
+        
+        candidates.push({
+            word,
+            positions,
+            variance,
+            avgConfidence,
+            avgY: positions[0].y  // For sorting
+        });
+    }
+    
+    // Sort by: lowest variance first, then topmost (by y)
+    candidates.sort((a, b) => {
+        if (a.variance !== b.variance) return a.variance - b.variance;
+        return a.avgY - b.avgY;
+    });
+    
+    const best = candidates[0];
+    
+    return {
+        word: best.word,
+        positions: best.positions,
+        variance: best.variance,
+        avgConfidence: best.avgConfidence
+    };
+};
+
+// Parse class numbers from filter input
+const parseClassNumbers = (input) => {
+    if (!input || !input.trim()) return null;
+    const numbers = new Set();
+    const parts = input.split(/[\s,]+/).filter(p => p.trim());
+    parts.forEach(p => {
+        if (p.includes('-')) {
+            const [start, end] = p.split('-').map(Number);
+            if (!isNaN(start) && !isNaN(end)) {
+                for (let i = Math.min(start, end); i <= Math.max(start, end); i++) numbers.add(i);
+            }
+        } else {
+            const n = parseInt(p);
+            if (!isNaN(n)) numbers.add(n);
+        }
+    });
+    return numbers;
+};
+
 const App = () => {
     const [scale, setScale] = useState(0.8);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -68,11 +212,16 @@ const App = () => {
     const [isBatchMode, setIsBatchMode] = useState(false);
     const [batchStep, setBatchStep] = useState(0); 
     const [batchPdfFiles, setBatchPdfFiles] = useState([]);
-    const processedFullPdfsRef = useRef([]); // Store full PDFs with added pages - use useRef to avoid holding in state
+    const processedFullPdfsRef = useRef([]); 
     const [previewPdfDoc, setPreviewPdfDoc] = useState(null);
     const [previewPdfPage, setPreviewPdfPage] = useState(1);
     const [previewTotalPages, setPreviewTotalPages] = useState(1);
     const [templateRegions, setTemplateRegions] = useState([]); 
+    const [progress, setProgress] = useState({ current: 0, total: 100, message: '' });
+    
+    // File loading state for progressive UI reveal
+    const [isLoadingFiles, setIsLoadingFiles] = useState(false);
+    const [loadingProgress, setLoadingProgress] = useState({ current: 0, total: 0, fileName: '' });
 
     const templateCanvasRef = useRef(null);
     const folderInputRef = useRef(null);
@@ -90,58 +239,16 @@ const App = () => {
         setTimeout(() => setToast(null), 3000);
     };
 
-    const renderPdfToCanvas = async (pdfDoc, pageNum, renderScale = 2.0) => {
-        try {
-            const page = await pdfDoc.getPage(pageNum);
-            const viewport = page.getViewport({ scale: renderScale });
-            const canvas = document.createElement('canvas');
-            const ctx = canvas.getContext('2d');
-            canvas.height = viewport.height;
-            canvas.width = viewport.width;
-            ctx.fillStyle = '#FFFFFF';
-            ctx.fillRect(0, 0, canvas.width, canvas.height);
-            
-            // Store render task and await it
-            const renderTask = page.render({ canvasContext: ctx, viewport });
-            await renderTask.promise;
-            
-            // Explicitly cleanup PDF.js page resources after rendering
-            page.cleanup();
-            
-            return { canvas, width: viewport.width, height: viewport.height };
-        } catch (e) {
-            console.error("Render error:", e);
-            throw e;
-        }
-    };
-
-    const parseClassNumbers = (input) => {
-        if (!input || !input.trim()) return null;
-        const numbers = new Set();
-        const parts = input.split(/[\s,]+/).filter(p => p.trim());
-        parts.forEach(p => {
-            if (p.includes('-')) {
-                const [start, end] = p.split('-').map(Number);
-                if (!isNaN(start) && !isNaN(end)) {
-                    for (let i = Math.min(start, end); i <= Math.max(start, end); i++) numbers.add(i);
-                }
-            } else {
-                const n = parseInt(p);
-                if (!isNaN(n)) numbers.add(n);
-            }
-        });
-        return numbers;
-    };
-
-    const updateRegionFilter = (index, value) => {
-        setTemplateRegions(prev => prev.map((r, i) => i === index ? { ...r, filter: value } : r));
-    };
-
     const handleFileSelect = async (e) => {
         const files = Array.from(e.target.files);
         if (!files.length) return;
 
-        setIsProcessing(true);
+        // Immediately show batch mode UI with loading state
+        setIsBatchMode(true);
+        setBatchStep(1);
+        setIsLoadingFiles(true);
+        setLoadingProgress({ current: 0, total: files.length, fileName: '' });
+
         try {
             const pdfjs = await loadPdfLib();
             const { PDFDocument, rgb, StandardFonts } = await loadPdfManipLib();
@@ -149,7 +256,9 @@ const App = () => {
             let preliminaryDocs = [];
             let maxPages = 0;
 
-            for (const file of files) {
+            for (let i = 0; i < files.length; i++) {
+                const file = files[i];
+                setLoadingProgress(prev => ({ ...prev, current: i + 1, fileName: file.name }));
                 const buffer = await file.arrayBuffer();
                 const doc = await pdfjs.getDocument({ data: new Uint8Array(buffer.slice(0)) }).promise;
                 if (doc.numPages > maxPages) maxPages = doc.numPages;
@@ -187,30 +296,28 @@ const App = () => {
                 }
                 
             fullPdfsToDownload.push({ name: item.file.name, bytes: finalBytes });
-            // Store raw bytes instead of PDF.js document to save memory
             finalDocs.push({ bytes: new Uint8Array(finalBytes), name: item.file.name, pageCount: maxPages });
             
-            // Only load preview doc for the first file
             if (finalDocs.length === 1) {
                 const previewDoc = await pdfjs.getDocument({ data: new Uint8Array(finalBytes) }).promise;
                 setPreviewPdfDoc(previewDoc);
             }
             
-            // Free original buffer after processing to save memory
             item.buffer = null;
         }
 
         setBatchPdfFiles(finalDocs);
         processedFullPdfsRef.current = fullPdfsToDownload;
         setPreviewTotalPages(maxPages);
-            setIsBatchMode(true);
-            setBatchStep(1);
             showToast(`Loaded ${files.length} files.`);
         } catch (err) {
             console.error(err);
             showToast("Failed to process PDF files.");
+            setIsBatchMode(false);
+            setBatchStep(0);
         } finally {
-            setIsProcessing(false);
+            setIsLoadingFiles(false);
+            setLoadingProgress({ current: 0, total: 0, fileName: '' });
         }
     };
 
@@ -229,9 +336,7 @@ const App = () => {
             link.href = url;
             link.download = "processed_pdfs.zip";
             link.click();
-            // Revoke object URL to free memory
             setTimeout(() => URL.revokeObjectURL(url), 1000);
-            // Clear the ref to free memory after download
             processedFullPdfsRef.current = [];
             showToast("ZIP downloaded successfully.");
         } catch {
@@ -243,9 +348,10 @@ const App = () => {
 
     const handleBatchProcessAndExport = async () => {
         if (templateRegions.length === 0) return showToast("Define at least one region.");
-        setIsProcessing(true);
         
+        setIsProcessing(true);
         let worker = null;
+        
         try {
             const pdfjs = await loadPdfLib();
             await loadTesseractLib();
@@ -255,42 +361,90 @@ const App = () => {
             
             worker = await window.Tesseract.createWorker('eng');
             
-            const pagesToExtract = [...new Set(templateRegions.map(r => r.page))].sort((a,b) => a-b);
-            const anchorMap = {}; 
-
-            // Store cropped images as base64 strings instead of PDF documents
-            // This prevents pdf-lib from caching images indefinitely
+            // ===== Calculate total work units for unified progress =====
+            const pagesWithRegions = [...new Set(templateRegions.map(r => r.page))].sort((a,b) => a-b);
+            const anchorDetectionWork = pagesWithRegions.length * batchPdfFiles.length;
+            const cropProcessingWork = batchPdfFiles.length;
+            const exportWork = templateRegions.length;
+            const totalWork = anchorDetectionWork + cropProcessingWork + exportWork;
+            
+            let completedWork = 0;
+            const updateUnifiedProgress = (message) => {
+                completedWork++;
+                const pct = Math.round((completedWork / totalWork) * 100);
+                setProgress({ current: pct, total: 100, message });
+            };
+            
+            setProgress({ current: 0, total: 100, message: 'Starting anchor detection...' });
+            
+            // ===== PHASE 2: Universal Anchor Detection =====
+            const anchorMap = {};
+            
+            for (const pageNum of pagesWithRegions) {
+                const perDocWordData = [];
+                
+                for (let docIndex = 0; docIndex < batchPdfFiles.length; docIndex++) {
+                    const item = batchPdfFiles[docIndex];
+                    
+                    const pdfDoc = await window.pdfjsLib.getDocument({ data: new Uint8Array(item.bytes) }).promise;
+                    const render = await renderPdfToCanvas(pdfDoc, pageNum, 1.5);
+                    
+                    const wordData = await ocrPageForAnchors(worker, render.canvas);
+                    perDocWordData.push({
+                        docIndex,
+                        words: wordData.words,
+                        counts: wordData.counts,
+                        positions: wordData.positions
+                    });
+                    
+                    cleanupCanvas(render.canvas);
+                    pdfDoc.destroy();
+                    
+                    updateUnifiedProgress(`Scanning page ${pageNum}, document ${docIndex + 1}/${batchPdfFiles.length}`);
+                }
+                
+                const anchor = findUniversalAnchor(perDocWordData);
+                
+                if (anchor) {
+                    anchorMap[pageNum] = {
+                        word: anchor.word,
+                        positions: anchor.positions,
+                        variance: anchor.variance,
+                        avgConfidence: anchor.avgConfidence
+                    };
+                    console.log(`Page ${pageNum}: Found anchor "${anchor.word}" (variance: ${anchor.variance.toFixed(2)}, confidence: ${anchor.avgConfidence.toFixed(1)}%)`);
+                } else {
+                    console.warn(`Page ${pageNum}: No universal anchor found`);
+                    anchorMap[pageNum] = null;
+                }
+                
+                perDocWordData.length = 0;
+            }
+            
+            // Report anchor detection results
+            const anchorCount = Object.values(anchorMap).filter(a => a !== null).length;
+            showToast(`Found universal anchors for ${anchorCount}/${pagesWithRegions.length} pages`);
+            
+            // ===== PHASE 3: Batch Crop Processing =====
             const croppedImagesByRegion = {};
             for (let i = 0; i < templateRegions.length; i++) {
                 croppedImagesByRegion[i] = [];
             }
 
-            for (const pNum of pagesToExtract) {
-                // Use lower scale for OCR-only canvases to reduce memory usage
-                const { canvas } = await renderPdfToCanvas(previewPdfDoc, pNum, 1.5);
-                anchorMap[pNum] = await findUniqueAnchor(worker, canvas);
-                // Clean up anchor canvas to free memory
-                const ctx = canvas.getContext('2d');
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-                canvas.width = 0;
-                canvas.height = 0;
-                canvas.remove();
-            }
-
-            for (const item of batchPdfFiles) {
-                // Load PDF.js document just-in-time to avoid holding multiple docs in memory
-                const currentDoc = await pdfjs.getDocument({ data: item.bytes }).promise;
+            for (let docIndex = 0; docIndex < batchPdfFiles.length; docIndex++) {
+                const item = batchPdfFiles[docIndex];
+                const currentDoc = await pdfjs.getDocument({ data: new Uint8Array(item.bytes) }).promise;
                 
                 const baseName = item.name.replace(/\.[^/.]+$/, ""); 
                 const lastTwoDigitsMatch = baseName.match(/(\d{2})$/);
                 const classNumber = lastTwoDigitsMatch ? parseInt(lastTwoDigitsMatch[1]) : null;
 
-                for (const pNum of pagesToExtract) {
-                    const regionsOnPageIndices = templateRegions
+                for (const pNum of pagesWithRegions) {
+                    const regionsOnPage = templateRegions
                         .map((r, idx) => ({ ...r, idx }))
                         .filter(r => r.page === pNum);
                     
-                    const applicableRegions = regionsOnPageIndices.filter(r => {
+                    const applicableRegions = regionsOnPage.filter(r => {
                         const allowedSet = parseClassNumbers(r.filter);
                         if (!allowedSet) return true;
                         return classNumber !== null && allowedSet.has(classNumber);
@@ -302,10 +456,11 @@ const App = () => {
                     let offX = 0, offY = 0;
                     
                     if (anchorMap[pNum]) {
-                        const pos = await findWordPosition(worker, render.canvas, anchorMap[pNum].word);
-                        if (pos) {
-                            offX = (pos.x - anchorMap[pNum].pos.x);
-                            offY = (pos.y - anchorMap[pNum].pos.y);
+                        const templatePos = anchorMap[pNum].positions[0];
+                        const currentPos = anchorMap[pNum].positions[docIndex];
+                        if (templatePos && currentPos) {
+                            offX = (currentPos.x - templatePos.x);
+                            offY = (currentPos.y - templatePos.y);
                         }
                     }
 
@@ -321,17 +476,10 @@ const App = () => {
                         const ctx = c.getContext('2d');
                         ctx.drawImage(render.canvas, cropX, cropY, cropW, cropH, 0, 0, cropW, cropH);
                         
-                        // Extract Base64 directly instead of Blob -> ArrayBuffer
-                        // Store in array to defer PDF creation until the end
                         const base64Data = c.toDataURL('image/jpeg', 0.9);
                         
-                        // IMMEDIATELY destroy temporary canvas
-                        ctx.clearRect(0, 0, c.width, c.height);
-                        c.width = 0;
-                        c.height = 0;
-                        c.remove();
+                        cleanupCanvas(c);
                         
-                        // Store image data in array instead of embedding into PDF immediately
                         croppedImagesByRegion[r.idx].push({
                             base64: base64Data,
                             width: cropW * 0.5,
@@ -339,26 +487,16 @@ const App = () => {
                         });
                     }
                     
-                    // Clean up render canvas after processing all regions on this page
-                    const renderCtx = render.canvas.getContext('2d');
-                    renderCtx.clearRect(0, 0, render.canvas.width, render.canvas.height);
-                    render.canvas.width = 0;
-                    render.canvas.height = 0;
-                    render.canvas.remove();
-                    render.canvas = null; // Break reference to signal GC
+                    cleanupCanvas(render.canvas);
                 }
                 
-                // VERY IMPORTANT: Destroy the PDF.js document object after finishing the file
-                // This releases all internal caches, fonts, and page references
                 currentDoc.destroy();
-                
-                // Force a short pause to allow Garbage Collector to clean up
-                // This prevents memory from accumulating across multiple PDFs
                 await new Promise(resolve => setTimeout(resolve, 10));
+                
+                updateUnifiedProgress(`Cropping document ${docIndex + 1}/${batchPdfFiles.length}`);
             }
             
-            // Build PDFs only at the end using stored base64 strings
-            // This prevents pdf-lib from caching images during the entire batch process
+            // ===== PHASE 4: Export =====
             for (let idx = 0; idx < templateRegions.length; idx++) {
                 const pdfDoc = await PDFDocument.create();
                 
@@ -377,8 +515,9 @@ const App = () => {
                 const fileName = `Q${idx + 1}_${templateRegions[idx].label}.pdf`;
                 zip.file(fileName, pdfBytes);
                 
-                // Clear array to free memory as we go
                 croppedImagesByRegion[idx] = null;
+                
+                updateUnifiedProgress(`Building PDF ${idx + 1}/${templateRegions.length}`);
             }
             
             const blob = await zip.generateAsync({type: "blob"});
@@ -387,43 +526,19 @@ const App = () => {
             link.href = url;
             link.download = "batch_questions_pdfs.zip";
             link.click();
-            // Revoke object URL to free memory
             setTimeout(() => URL.revokeObjectURL(url), 1000);
 
             showToast("Success! ZIP downloaded.");
             setIsBatchMode(false);
             setBatchStep(0);
-        } catch {
-            console.error("Zip generation failed.");
-            showToast("Zip generation failed.");
+        } catch (err) {
+            console.error("Processing failed:", err);
+            showToast("Processing failed: " + err.message);
         } finally {
             if (worker) await worker.terminate();
             setIsProcessing(false);
+            setProgress({ current: 0, total: 0, message: '' });
         }
-    };
-
-    const findUniqueAnchor = async (worker, canvas) => {
-        // Pass base64 string instead of canvas to prevent WebAssembly memory leaks
-        const base64 = canvas.toDataURL('image/jpeg', 0.5);
-        const { data: { words } } = await worker.recognize(base64);
-        const counts = {}, positions = {};
-        words.forEach(w => {
-            const t = w.text.trim().toLowerCase();
-            if (t.length > 4 && w.confidence > 80) { 
-                counts[t] = (counts[t] || 0) + 1; 
-                positions[t] = { x: w.bbox.x0, y: w.bbox.y0 }; 
-            }
-        });
-        const cand = Object.keys(counts).filter(w => counts[w] === 1).sort((a,b) => positions[a].y - positions[b].y);
-        return cand.length ? { word: cand[0], pos: positions[cand[0]] } : null;
-    };
-
-    const findWordPosition = async (worker, canvas, target) => {
-        // Pass base64 string instead of canvas to prevent WebAssembly memory leaks
-        const base64 = canvas.toDataURL('image/jpeg', 0.5);
-        const { data: { words } } = await worker.recognize(base64);
-        const match = words.find(w => w.text.toLowerCase().includes(target.toLowerCase()));
-        return match ? { x: match.bbox.x0, y: match.bbox.y0 } : null;
     };
 
     const drawTemplateCanvas = async (ghost = null) => {
@@ -433,7 +548,6 @@ const App = () => {
         const ctx = canvas.getContext('2d');
         const { canvas: pdfCanvas } = await renderPdfToCanvas(previewPdfDoc, previewPdfPage, 1.0);
         
-        // Logical size of the canvas at current scale
         canvas.width = pdfCanvas.width * scale; 
         canvas.height = pdfCanvas.height * scale;
         
@@ -442,15 +556,15 @@ const App = () => {
         ctx.scale(scale, scale);
         ctx.drawImage(pdfCanvas, 0, 0);
         
-            templateRegions.filter(r => r.page === previewPdfPage).forEach((r) => {
-                const regionIndex = templateRegions.indexOf(r);
-                ctx.strokeStyle = '#d29922'; 
-                ctx.lineWidth = 3 / scale; // Keep stroke thickness visually consistent
-                ctx.strokeRect(r.x, r.y, r.width, r.height);
-                ctx.fillStyle = '#d29922';
-                ctx.font = `bold ${12 / scale}px sans-serif`;
-                ctx.fillText(`Q${regionIndex + 1}: ${r.label}`, r.x, r.y - (5 / scale));
-            });
+        templateRegions.filter(r => r.page === previewPdfPage).forEach((r) => {
+            const regionIndex = templateRegions.indexOf(r);
+            ctx.strokeStyle = '#d29922'; 
+            ctx.lineWidth = 3 / scale;
+            ctx.strokeRect(r.x, r.y, r.width, r.height);
+            ctx.fillStyle = '#d29922';
+            ctx.font = `bold ${12 / scale}px sans-serif`;
+            ctx.fillText(`Q${regionIndex + 1}: ${r.label}`, r.x, r.y - (5 / scale));
+        });
         
         if (ghost) { 
             ctx.strokeStyle = '#58a6ff'; 
@@ -460,19 +574,13 @@ const App = () => {
         }
         ctx.restore();
         
-        // Clean up off-screen render canvas to free memory
-        const pdfCtx = pdfCanvas.getContext('2d');
-        pdfCtx.clearRect(0, 0, pdfCanvas.width, pdfCanvas.height);
-        pdfCanvas.width = 0;
-        pdfCanvas.height = 0;
-        pdfCanvas.remove();
+        cleanupCanvas(pdfCanvas);
     };
 
     const startDrag = (e) => {
         const canvas = templateCanvasRef.current;
         const rect = canvas.getBoundingClientRect();
         
-        // Calculate coordinate relative to the unscaled PDF dimensions
         const startX = (e.clientX - rect.left) / scale;
         const startY = (e.clientY - rect.top) / scale;
 
@@ -505,10 +613,106 @@ const App = () => {
             }
             window.removeEventListener('mousemove', onMove);
             window.removeEventListener('mouseup', onUp);
-            drawTemplateCanvas(); // Final redraw to clear ghost
+            drawTemplateCanvas();
         };
         window.addEventListener('mousemove', onMove);
         window.addEventListener('mouseup', onUp);
+    };
+
+    // Loading canvas component with fade in/out animation
+    const LoadingCanvas = () => {
+        const canvasRef = useRef(null);
+        
+        useEffect(() => {
+            const canvas = canvasRef.current;
+            if (!canvas) return;
+            
+            const ctx = canvas.getContext('2d');
+            const width = 595;
+            const height = 842;
+            canvas.width = width;
+            canvas.height = height;
+            
+            let opacity = 0;
+            let increasing = true;
+            let animationId;
+            
+            const draw = () => {
+                ctx.clearRect(0, 0, width, height);
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, width, height);
+                
+                // Draw loading template pattern
+                ctx.globalAlpha = 0.1;
+                ctx.strokeStyle = '#58a6ff';
+                ctx.lineWidth = 1;
+                
+                // Draw grid pattern
+                for (let x = 0; x < width; x += 40) {
+                    ctx.beginPath();
+                    ctx.moveTo(x, 0);
+                    ctx.lineTo(x, height);
+                    ctx.stroke();
+                }
+                for (let y = 0; y < height; y += 40) {
+                    ctx.beginPath();
+                    ctx.moveTo(0, y);
+                    ctx.lineTo(width, y);
+                    ctx.stroke();
+                }
+                
+                ctx.globalAlpha = 1;
+                
+                // Draw loading text with fade animation
+                ctx.globalAlpha = opacity;
+                ctx.fillStyle = '#58a6ff';
+                ctx.font = 'bold 24px sans-serif';
+                ctx.textAlign = 'center';
+                ctx.fillText('Loading PDF...', width / 2, height / 2 - 20);
+                
+                ctx.font = '14px sans-serif';
+                ctx.fillStyle = '#8b949e';
+                if (loadingProgress.fileName) {
+                    ctx.fillText(`Processing: ${loadingProgress.fileName}`, width / 2, height / 2 + 20);
+                    ctx.fillText(`${loadingProgress.current} / ${loadingProgress.total} files`, width / 2, height / 2 + 45);
+                }
+                
+                ctx.globalAlpha = 1;
+                
+                // Animate opacity
+                if (increasing) {
+                    opacity += 0.02;
+                    if (opacity >= 1) {
+                        opacity = 1;
+                        increasing = false;
+                    }
+                } else {
+                    opacity -= 0.02;
+                    if (opacity <= 0.3) {
+                        opacity = 0.3;
+                        increasing = true;
+                    }
+                }
+                
+                animationId = requestAnimationFrame(draw);
+            };
+            
+            draw();
+            
+            return () => {
+                if (animationId) {
+                    cancelAnimationFrame(animationId);
+                }
+            };
+        }, [loadingProgress]);
+        
+        return (
+            <canvas 
+                ref={canvasRef} 
+                className="shadow-2xl border border-[#30363d] bg-white transition-all"
+                style={{ width: 595 * scale, height: 842 * scale }}
+            />
+        );
     };
 
     if (isBatchMode && batchStep === 1) {
@@ -524,7 +728,7 @@ const App = () => {
                 </div>
                 <div className="flex-1 flex overflow-hidden">
                     <div className={`w-80 ${theme.sidebar} border-r ${theme.border} p-5 flex flex-col`}>
-                        <div className="mb-6">
+                        <div className={`mb-6 ${isLoadingFiles ? 'opacity-50 pointer-events-none' : ''}`}>
                             <h3 className="font-bold mb-2 text-sm text-gray-400">Editor Controls</h3>
                             <div className="grid grid-cols-2 gap-2 mb-4">
                                 <button onClick={() => setScale(s => Math.max(0.1, s - 0.1))} className="flex items-center justify-center gap-2 py-2 bg-[#21262d] border border-[#30363d] rounded text-[10px] hover:bg-[#30363d]"><ZoomOut size={12}/> Zoom Out</button>
@@ -532,60 +736,97 @@ const App = () => {
                             </div>
                             <div className="flex items-center justify-between bg-black/30 p-2 rounded">
                                 <button onClick={() => setPreviewPdfPage(p => Math.max(1, p-1))} className="p-1 hover:bg-white/10 rounded"><ChevronLeft size={20}/></button>
-                                <span className="text-xs font-mono">Page {previewPdfPage} / {previewTotalPages}</span>
+                                <span className="text-xs font-mono">Page {previewPdfPage} / {previewTotalPages || '?'}</span>
                                 <button onClick={() => setPreviewPdfPage(p => Math.min(previewTotalPages, p+1))} className="p-1 hover:bg-white/10 rounded"><ChevronRight size={20}/></button>
                             </div>
                         </div>
 
-                        {processedFullPdfsRef.current.length > 0 && (
-                            <div className="mb-6 p-3 bg-[#1f6feb]/10 border border-[#1f6feb]/30 rounded-lg">
-                                <h3 className="text-[10px] font-bold text-[#58a6ff] uppercase tracking-wider mb-2">Padded Documents</h3>
-                                <p className="text-[10px] text-gray-400 mb-3 leading-tight">All documents have been unified to {previewTotalPages} pages. You can download the full processed files below.</p>
-                                <button 
-                                    onClick={downloadProcessedPdfsZip} 
-                                    className="w-full py-2 bg-[#238636] hover:bg-[#2ea043] rounded flex items-center justify-center gap-2 text-[11px] font-bold text-white transition-colors"
-                                >
-                                    <Download size={12}/> Download Processed PDFs (ZIP)
-                                </button>
+                        {/* Loading indicator for sidebar */}
+                        {isLoadingFiles && (
+                            <div className="mb-6 p-3 bg-[#1f6feb]/10 border border-[#1f6feb]/30 rounded-lg animate-pulse">
+                                <div className="flex items-center gap-2 mb-2">
+                                    <Loader2 className="animate-spin text-[#58a6ff]" size={16} />
+                                    <h3 className="text-[10px] font-bold text-[#58a6ff] uppercase tracking-wider">Loading Files...</h3>
+                                </div>
+                                <p className="text-[10px] text-gray-400 mb-2 leading-tight">
+                                    {loadingProgress.fileName || 'Preparing...'}
+                                </p>
+                                <div className="w-full bg-[#30363d] rounded-full h-1.5">
+                                    <div 
+                                        className="bg-[#58a6ff] h-1.5 rounded-full transition-all duration-300" 
+                                        style={{ width: `${loadingProgress.total > 0 ? (loadingProgress.current / loadingProgress.total) * 100 : 0}%` }}
+                                    ></div>
+                                </div>
+                                <p className="text-[9px] text-gray-500 mt-1 text-right">
+                                    {loadingProgress.current} / {loadingProgress.total} files
+                                </p>
                             </div>
                         )}
 
-                        <h3 className="font-bold mb-2 text-sm text-gray-400">Target Regions</h3>
-                        <div className="flex-1 overflow-auto space-y-3 mb-4 pr-1 scrollbar-thin">
-                            {templateRegions.length === 0 && <div className="text-[10px] text-gray-500 italic p-6 text-center border border-dashed border-[#30363d] rounded">Drag boxes on the document to define crop areas</div>}
-                            {templateRegions.map((r, i) => (
-                                <div key={i} className="p-3 bg-[#0d1117] border border-[#30363d] rounded-lg space-y-2 group">
-                                    <div className="flex justify-between items-center">
-                                        <span className="text-[10px] font-bold text-[#58a6ff]">Q{i + 1}: {r.label} (Page {r.page})</span>
-                                        <button onClick={() => setTemplateRegions(templateRegions.filter((_, idx) => idx !== i))} className="text-red-500 hover:scale-110 opacity-50 group-hover:opacity-100 transition-opacity"><Trash2 size={12}/></button>
-                                    </div>
-                                    <div className="relative">
-                                        <Hash className="absolute left-2 top-2 text-gray-500" size={12}/>
-                                        <input 
-                                            type="text"
-                                            placeholder="Student ID filter (e.g. 01, 05, 10-15)"
-                                            value={r.filter}
-                                            onChange={(e) => updateRegionFilter(i, e.target.value)}
-                                            className="w-full bg-black/40 border border-[#30363d] rounded pl-7 pr-2 py-1.5 text-[10px] focus:outline-none focus:border-[#58a6ff]"
-                                        />
-                                    </div>
+                        <div className={`${isLoadingFiles ? 'opacity-50 pointer-events-none blur-[2px]' : ''}`}>
+                            {processedFullPdfsRef.current.length > 0 && (
+                                <div className="mb-6 p-3 bg-[#1f6feb]/10 border border-[#1f6feb]/30 rounded-lg">
+                                    <h3 className="text-[10px] font-bold text-[#58a6ff] uppercase tracking-wider mb-2">Padded Documents</h3>
+                                    <p className="text-[10px] text-gray-400 mb-3 leading-tight">All documents have been unified to {previewTotalPages} pages. You can download the full processed files below.</p>
+                                    <button 
+                                        onClick={downloadProcessedPdfsZip} 
+                                        className="w-full py-2 bg-[#238636] hover:bg-[#2ea043] rounded flex items-center justify-center gap-2 text-[11px] font-bold text-white transition-colors"
+                                    >
+                                        <Download size={12}/> Download Processed PDFs (ZIP)
+                                    </button>
                                 </div>
-                            ))}
+                            )}
+
+                            <h3 className="font-bold mb-2 text-sm text-gray-400">Target Regions</h3>
+                            <div className="flex-1 overflow-auto space-y-3 mb-4 pr-1 scrollbar-thin">
+                                {templateRegions.length === 0 && <div className="text-[10px] text-gray-500 italic p-6 text-center border border-dashed border-[#30363d] rounded">Drag boxes on the document to define crop areas</div>}
+                                {templateRegions.map((r, i) => (
+                                    <div key={i} className="p-3 bg-[#0d1117] border border-[#30363d] rounded-lg space-y-2 group">
+                                        <div className="flex justify-between items-center">
+                                            <span className="text-[10px] font-bold text-[#58a6ff]">Q{i + 1}: {r.label} (Page {r.page})</span>
+                                            <button onClick={() => setTemplateRegions(templateRegions.filter((_, idx) => idx !== i))} className="text-red-500 hover:scale-110 opacity-50 group-hover:opacity-100 transition-opacity"><Trash2 size={12}/></button>
+                                        </div>
+                                        <div className="relative">
+                                            <Hash className="absolute left-2 top-2 text-gray-500" size={12}/>
+                                            <input 
+                                                type="text"
+                                                placeholder="Student ID filter (e.g. 01, 05, 10-15)"
+                                                value={r.filter}
+                                                onChange={(e) => {
+                                                    const value = e.target.value;
+                                                    setTemplateRegions(prev => prev.map((region, idx) => idx === i ? { ...region, filter: value } : region));
+                                                }}
+                                                className="w-full bg-black/40 border border-[#30363d] rounded pl-7 pr-2 py-1.5 text-[10px] focus:outline-none focus:border-[#58a6ff]"
+                                            />
+                                        </div>
+                                    </div>
+                                ))}
+                            </div>
                         </div>
 
-                        <button onClick={handleBatchProcessAndExport} className={`w-full py-4 ${theme.accentBg} rounded-lg font-bold flex flex-col items-center justify-center gap-1 shadow-lg active:scale-95 transition-transform`}>
-                            <div className="flex items-center gap-2"><Scissors size={18}/> Process & Export Crops</div>
+                        <button 
+                            onClick={handleBatchProcessAndExport} 
+                            className={`w-full py-4 ${isLoadingFiles ? 'bg-gray-600 cursor-not-allowed' : theme.accentBg} rounded-lg font-bold flex flex-col items-center justify-center gap-1 shadow-lg active:scale-95 transition-transform ${isLoadingFiles ? 'opacity-50' : ''}`}
+                            disabled={isLoadingFiles}
+                        >
+                            <div className="flex items-center gap-2">
+                                {isLoadingFiles ? <Loader2 className="animate-spin" size={18} /> : <Scissors size={18}/>} 
+                                Process & Export Crops
+                            </div>
                             <span className="text-[9px] font-normal opacity-70 italic text-center">Groups crops into Q1.pdf, Q2.pdf, etc.</span>
                         </button>
                     </div>
-                    {/* Centered Scrollable Canvas Container */}
                     <div className="flex-1 bg-[#010409] overflow-auto flex items-start p-10 bg-[radial-gradient(#30363d_1px,transparent_1px)] bg-[size:20px_20px]">
                         <div className="flex-shrink-0 relative mx-auto">
-                            <canvas 
-                                ref={templateCanvasRef} 
-                                onMouseDown={startDrag} 
-                                className="shadow-2xl border border-[#30363d] bg-white cursor-crosshair transition-all" 
-                            />
+                            {isLoadingFiles || !previewPdfDoc ? (
+                                <LoadingCanvas />
+                            ) : (
+                                <canvas 
+                                    ref={templateCanvasRef} 
+                                    onMouseDown={startDrag} 
+                                    className="shadow-2xl border border-[#30363d] bg-white cursor-crosshair transition-all" 
+                                />
+                            )}
                         </div>
                     </div>
                 </div>
@@ -593,10 +834,19 @@ const App = () => {
                     <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center z-50 animate-in fade-in duration-300">
                         <div className="relative">
                             <Loader2 className="animate-spin text-[#58a6ff] mb-6" size={64} />
-                            <ScanLine className="absolute inset-0 m-auto text-white opacity-50 animate-pulse" size={24} />
                         </div>
-                        <h2 className="text-2xl font-bold mb-2 tracking-tight">Processing Documents</h2>
-                        <p className="text-sm text-gray-400 max-w-xs text-center">Running OCR and aligning crops across all files...</p>
+                        <h2 className="text-2xl font-bold mb-2 tracking-tight">{progress.message || 'Processing Documents'}</h2>
+                        {progress.total > 0 && (
+                            <div className="w-64 bg-[#30363d] rounded-full h-2 mt-4">
+                                <div 
+                                    className="bg-[#58a6ff] h-2 rounded-full transition-all duration-300" 
+                                    style={{ width: `${Math.round((progress.current / progress.total) * 100)}%` }}
+                                ></div>
+                            </div>
+                        )}
+                        {progress.total > 0 && (
+                            <p className="text-sm text-gray-400 mt-2">{Math.round((progress.current / progress.total) * 100)}% complete</p>
+                        )}
                     </div>
                 )}
             </div>
@@ -631,7 +881,7 @@ const App = () => {
             {isProcessing && (
                 <div className="absolute inset-0 bg-black/85 flex flex-col items-center justify-center z-50">
                     <Loader2 className="animate-spin text-[#58a6ff] mb-4" size={48} />
-                    <p className="text-white font-medium">Loading PDFs...</p>
+                    <p className="text-white font-medium">{progress.message || 'Loading PDFs...'}</p>
                 </div>
             )}
             {toast && <div className="fixed bottom-8 right-8 px-6 py-3 bg-[#238636] text-white text-sm font-bold rounded-xl shadow-2xl animate-in slide-in-from-bottom-4 duration-300">{toast}</div>}
