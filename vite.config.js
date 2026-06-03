@@ -13,6 +13,7 @@ export default defineConfig({
         // The new beta entry point
         beta: resolve(__dirname, 'beta/index.html'),
         test: resolve(__dirname, 'test/index.html'),
+        alpha: resolve(__dirname, 'alpha/index.html'),
       },
     },
   },
