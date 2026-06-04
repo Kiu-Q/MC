@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Upload, FileSpreadsheet, Plus, Trash2, CheckCircle2, ScanSearch, Settings, ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut, LayoutTemplate, ChevronLeft, Layers, ScanLine, GraduationCap, Hash, UserSquare2, X, Loader2, RotateCw, Menu, GitBranch, Camera, FileText ,Signature} from 'lucide-react';
+import { Upload, FileSpreadsheet, Plus, Trash2, CheckCircle2, ScanSearch, Settings, ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut, LayoutTemplate, ChevronLeft, Layers, ScanLine, GraduationCap, Hash, UserSquare2, X, Loader2, RotateCw, Menu, GitBranch, Camera, FileText, Signature, Save, BookmarkPlus } from 'lucide-react';
 
 const App = () => {
     // State for multiple pages
@@ -25,10 +25,241 @@ const App = () => {
 
     // Marks State (Batch Sections)
     const [isMarksSettingsOpen, setIsMarksSettingsOpen] = useState(false);
-    const [isTemplateSettingsOpen, setIsTemplateSettingsOpen] = useState(false); // New state for dropdown
     const [weightSections, setWeightSections] = useState([
         { id: 1, start: 1, end: 60, mark: 1 }
     ]);
+
+    // Built-in default template — always present, cannot be edited or deleted
+    const DEFAULT_TEMPLATE_ID = '__default__';
+    const getDefaultTemplate = () => {
+        // Use standard region ratios (derived from getStandardRegions w/ no offset)
+        // Approximate ratios based on getStandardRegions constants
+        const IMG_W = 1, IMG_H = 1;
+        const idW = 0.015;
+        const idY = 0.066;
+        const idH = 0.135;
+        const ansW = 0.165;
+        const ansY = 0.273;
+        const ansH = 0.468;
+        return {
+            id: DEFAULT_TEMPLATE_ID,
+            name: 'Default',
+            isBuiltIn: true,
+            createdAt: '—',
+            idRegions: [
+                { xRatio: 0.435, yRatio: idY, wRatio: idW, hRatio: idH * 0.7, rows: 7, cols: 1, labels: ['1','2','3','4','5','6','7'], gapHeightRatio: 1, hasGaps: false, suffix: 'level' },
+                { xRatio: 0.51, yRatio: idY, wRatio: idW, hRatio: idH * 0.6, rows: 6, cols: 1, labels: ['A','B','C','D','E','S'], gapHeightRatio: 1, hasGaps: false, suffix: 'letter' },
+                { xRatio: 0.605, yRatio: idY, wRatio: idW, hRatio: idH, rows: 10, cols: 1, labels: ['0','1','2','3','4','5','6','7','8','9'], gapHeightRatio: 1, hasGaps: false, suffix: 'n1' },
+                { xRatio: 0.645, yRatio: idY, wRatio: idW, hRatio: idH, rows: 10, cols: 1, labels: ['0','1','2','3','4','5','6','7','8','9'], gapHeightRatio: 1, hasGaps: false, suffix: 'n2' },
+            ],
+            answerRegions: [
+                { xRatio: 0.43, yRatio: ansY, wRatio: ansW, hRatio: ansH, rows: 35, cols: 4, startQ: 1, labels: ['A','B','C','D'], gapHeightRatio: 0.6, hasGaps: true },
+                { xRatio: 0.723, yRatio: ansY, wRatio: ansW, hRatio: ansH, rows: 35, cols: 4, startQ: 31, labels: ['A','B','C','D'], gapHeightRatio: 0.6, hasGaps: true },
+            ],
+            sourceXOffset: 0,
+            sourceYOffset: 0,
+            useAlignmentY: true,
+            useAlignmentX: true,
+        };
+    };
+
+    // Custom Template State
+    const [templates, setTemplates] = useState(() => {
+        try {
+            const saved = localStorage.getItem('mc-sheet-templates');
+            return saved ? JSON.parse(saved) : [];
+        } catch { return []; }
+    });
+    const [lastAppliedTemplateId, setLastAppliedTemplateId] = useState(() => {
+        try { return localStorage.getItem('mc-sheet-last-template') || DEFAULT_TEMPLATE_ID; }
+        catch { return DEFAULT_TEMPLATE_ID; }
+    });
+
+    // Combined list: default always first, then user templates
+    const allTemplates = useMemo(() => [getDefaultTemplate(), ...templates], [templates]);
+    const [showSaveTemplateModal, setShowSaveTemplateModal] = useState(false);
+    const [newTemplateName, setNewTemplateName] = useState('');
+    const [isTemplateSectionOpen, setIsTemplateSectionOpen] = useState(false);
+
+    // Template Builder State (Visual Drag-to-Draw)
+    const [drawMode, setDrawMode] = useState(false); // true = user is drawing on canvas
+    const [drawnBlocks, setDrawnBlocks] = useState([]); // { uid, xRatio, yRatio, wRatio, hRatio, blockType, rows, cols, labels, startQ, suffix, hasGaps, gapHeightRatio }
+    const [currentDraw, setCurrentDraw] = useState(null); // { startX, startY, endX, endY } in image coords while dragging
+    const [drawTemplateMode, setDrawTemplateMode] = useState('idle'); // 'idle' | 'naming'
+    const [drawTemplateName, setDrawTemplateName] = useState('');
+    const [selectedDrawnBlock, setSelectedDrawnBlock] = useState(null);
+    const [drawNextQ, setDrawNextQ] = useState(1);
+    const [editingTemplateId, setEditingTemplateId] = useState(null);
+    const [drawLineY, setDrawLineY] = useState(null); // adjustable detected horizontal line Y (image coords)
+    const [drawLineX, setDrawLineX] = useState(null); // adjustable detected vertical line X (image coords)
+    const [isDraggingLineY, setIsDraggingLineY] = useState(false);
+    const [isDraggingLineX, setIsDraggingLineX] = useState(false);
+    const [useLineY, setUseLineY] = useState(true); // toggle: use horizontal alignment
+    const [useLineX, setUseLineX] = useState(true); // toggle: use vertical alignment
+
+    // Persist templates to localStorage
+    useEffect(() => {
+        localStorage.setItem('mc-sheet-templates', JSON.stringify(templates));
+    }, [templates]);
+
+    // Persist last-applied template id
+    useEffect(() => {
+        localStorage.setItem('mc-sheet-last-template', lastAppliedTemplateId);
+    }, [lastAppliedTemplateId]);
+
+    // --- Draw Mode Functions ---
+    const startDrawMode = () => {
+        if (!currentPage) return;
+        setDrawMode(true);
+        setDrawnBlocks([]);
+        setCurrentDraw(null);
+        setSelectedDrawnBlock(null);
+        setDrawNextQ(1);
+        setDrawTemplateMode('idle');
+        setDrawTemplateName('');
+        setSelectedRegionId(null);
+        setDrawLineY(currentPage.detectedLineY || Math.round(currentPage.height * 0.227));
+        setDrawLineX(currentPage.detectedLineX || Math.round(currentPage.width * 0.355));
+        setIsDraggingLineY(false);
+        setIsDraggingLineX(false);
+        setUseLineY(true);
+        setUseLineX(true);
+    };
+
+    // Sync alignment lines when navigating pages in draw mode
+    useEffect(() => {
+        if (drawMode && currentPage) {
+            setDrawLineY(currentPage.detectedLineY || Math.round(currentPage.height * 0.227));
+            setDrawLineX(currentPage.detectedLineX || Math.round(currentPage.width * 0.355));
+            setIsDraggingLineY(false);
+            setIsDraggingLineX(false);
+        }
+    }, [currentPageIndex, drawMode]);
+
+    const cancelDrawMode = () => {
+        setDrawMode(false);
+        setDrawnBlocks([]);
+        setCurrentDraw(null);
+        setSelectedDrawnBlock(null);
+        setDrawTemplateMode('idle');
+        setDrawTemplateName('');
+        setEditingTemplateId(null);
+        setDrawLineY(null);
+        setDrawLineX(null);
+        setIsDraggingLineY(false);
+        setIsDraggingLineX(false);
+    };
+
+    const updateDrawnBlock = (uid, field, value) => {
+        setDrawnBlocks(prev => prev.map(b => {
+            if (b.uid !== uid) return b;
+            const updated = { ...b, [field]: value };
+            if (field === 'blockType') {
+                if (value === 'id') {
+                    updated.labels = ['0','1','2','3','4','5','6','7','8','9'];
+                    updated.rows = 10;
+                    updated.cols = 1;
+                    updated.suffix = updated.suffix || 'custom';
+                    updated.hasGaps = false;
+                    updated.gapHeightRatio = 1;
+                } else if (value === 'answer') {
+                    updated.labels = ['A','B','C','D'];
+                    updated.rows = 5;
+                    updated.cols = 4;
+                    updated.startQ = updated.startQ || 1;
+                    updated.hasGaps = false;
+                    updated.gapHeightRatio = 1;
+                }
+            }
+            if (field === 'hasGaps') {
+                updated.gapHeightRatio = value ? 0.6 : 1;
+            }
+            // Store raw labels text — parsing happens on save
+            if (field === 'labels') {
+                updated.labelsText = value;
+                const labels = value.split(',').map(s => s.trim()).filter(Boolean);
+                updated.labels = labels;
+                if (b.blockType === 'id') {
+                    updated.rows = labels.length;
+                } else if (b.blockType === 'answer' && labels.length > 0) {
+                    updated.cols = labels.length;
+                }
+            }
+            return updated;
+        }));
+    };
+
+    const removeDrawnBlock = (uid) => {
+        setDrawnBlocks(prev => prev.filter(b => b.uid !== uid));
+        if (selectedDrawnBlock === uid) setSelectedDrawnBlock(null);
+    };
+
+    const saveDrawnTemplate = async () => {
+        if (!drawTemplateName.trim() || drawnBlocks.length === 0) return;
+        // Convert percentage-based ratios (0-100) to decimal ratios (0-1) for storage
+        const convertToDecimal = (b) => {
+            const { uid: _u, blockType: _t, labelsText: _lt, ...rest } = b;
+            return {
+                ...rest,
+                xRatio: rest.xRatio / 100,
+                yRatio: rest.yRatio / 100,
+                wRatio: rest.wRatio / 100,
+                hRatio: rest.hRatio / 100,
+            };
+        };
+        const idRegions = drawnBlocks.filter(b => b.blockType === 'id').map(convertToDecimal);
+        const answerRegions = drawnBlocks.filter(b => b.blockType === 'answer').map(convertToDecimal);
+        const savedName = drawTemplateName.trim();
+
+        // Capture source page offsets for re-alignment.
+        // If the user adjusted the alignment lines in draw mode, use their adjusted
+        // line positions to derive the offsets rather than the auto-detected ones.
+        let xOffset = 0;
+        let yOffset = 0;
+        if (currentPage) {
+            const auto = await detectOffsetsFromImage(currentPage.imageUrl, currentPage.width, currentPage.height);
+            // Y axis: use adjusted line if toggle is on
+            if (useLineY && drawLineY != null) {
+                yOffset = drawLineY - (currentPage.height * 0.227);
+            } else if (!useLineY) {
+                yOffset = 0; // alignment disabled
+            } else {
+                yOffset = auto.yOffset;
+            }
+            // X axis: use adjusted line if toggle is on
+            if (useLineX && drawLineX != null) {
+                xOffset = drawLineX - (currentPage.width * 0.355);
+            } else if (!useLineX) {
+                xOffset = 0; // alignment disabled
+            } else {
+                xOffset = auto.xOffset;
+            }
+        }
+
+        if (editingTemplateId) {
+            setTemplates(prev => prev.map(t => {
+                if (t.id !== editingTemplateId) return t;
+                return { ...t, name: savedName, idRegions, answerRegions, sourceXOffset: xOffset, sourceYOffset: yOffset, useAlignmentY: useLineY, useAlignmentX: useLineX };
+            }));
+            setToast(`Template "${savedName}" updated!`);
+        } else {
+            const newTpl = {
+                id: Date.now().toString(),
+                name: savedName,
+                createdAt: new Date().toISOString(),
+                idRegions, answerRegions,
+                sourceXOffset: xOffset,
+                sourceYOffset: yOffset,
+                useAlignmentY: useLineY,
+                useAlignmentX: useLineX,
+            };
+            setTemplates(prev => [...prev, newTpl]);
+            setToast(`Template "${savedName}" created!`);
+        }
+        setTimeout(() => setToast(null), 3000);
+        cancelDrawMode();
+    };
+
 
     const canvasRef = useRef(null);
     const containerRef = useRef(null);
@@ -58,7 +289,7 @@ const App = () => {
         return (isNaN(mark) || mark <= 0) ? 1 : mark;
     };
 
-    // Helper to extract Student ID from results
+    // Helper to extract Student ID from results (dynamic — reads all ID regions)
     const getPageName = (page, index) => {
         if (!page.results) return `Page ${index + 1}`;
 
@@ -72,16 +303,31 @@ const App = () => {
             return '?';
         };
 
-        const level = getVal(`p${page.id}_id_level`);
-        const letter = getVal(`p${page.id}_id_letter`);
-        const ten = getVal(`p${page.id}_id_n1`);
-        const unit = getVal(`p${page.id}_id_n2`);
+        // Dynamically find all ID regions on this page
+        const idRegions = (page.regions || []).filter(r => r.type === 'id');
+        if (idRegions.length === 0) return `Page ${index + 1}`;
 
-        if (level === '?' && letter === '?' && ten === '?' && unit === '?') {
-            return `Page ${index + 1}`;
-        }
+        const values = idRegions.map(r => getVal(r.id));
+        if (values.every(v => v === '?')) return `Page ${index + 1}`;
 
-        return `${level}${letter}${ten}${unit}`;
+        return values.join('');
+    };
+
+    // Helper: Get all ID region info for a page (dynamic)
+    const getIdFieldsForPage = (pageIdx) => {
+        const page = pages[pageIdx];
+        if (!page) return [];
+        return (page.regions || [])
+            .filter(r => r.type === 'id')
+            .map(r => {
+                const suffix = r.id.split('_id_')[1] || '?';
+                return {
+                    regionId: r.id,
+                    suffix,
+                    label: suffix.toUpperCase(),
+                    options: r.labels || ['0','1','2','3','4','5','6','7','8','9'],
+                };
+            });
     };
 
     // Load External Libraries (PDF.js and XLSX)
@@ -232,6 +478,37 @@ const App = () => {
         return 0;
     };
 
+    // --- Helper: Get absolute X position of detected vertical line ---
+    const getDetectedLineX = (ctx, width, height) => {
+        const EXPECTED_X_RATIO = 0.355;
+        const searchStartX = Math.floor(width * 0.2);
+        const searchEndX = Math.floor(width * 0.5);
+        const searchStartY = Math.floor(height * 0.5);
+        const searchHeight = Math.floor(height * 0.9);
+        try {
+            const pixels = ctx.getImageData(searchStartX, searchStartY, searchEndX - searchStartX, searchHeight);
+            const data = pixels.data;
+            const searchW = searchEndX - searchStartX;
+            let maxDarkness = 0;
+            let bestX = -1;
+            for (let x = 0; x < searchW; x++) {
+                let darkPixels = 0;
+                for (let y = 0; y < searchHeight; y++) {
+                    const idx = (y * searchW + x) * 4;
+                    const val = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+                    if (val < 200) darkPixels++;
+                }
+                if (darkPixels > searchHeight * 0.5) {
+                    if (darkPixels > maxDarkness) { maxDarkness = darkPixels; bestX = x; }
+                }
+            }
+            if (bestX !== -1) {
+                return searchStartX + bestX;
+            }
+        } catch (e) { console.warn("Line X detection failed", e); }
+        return -1;
+    };
+
     // --- Helper: Get absolute Y position of detected horizontal line ---
     const getDetectedLineY = (ctx, width, height) => {
         const searchStartY = Math.floor(height * 0.3);
@@ -260,22 +537,6 @@ const App = () => {
             }
         } catch (e) { console.warn("Line Y detection failed", e); }
         return -1;
-    };
-
-    // --- Helper: Crop image from detected line downward ---
-    const cropImageFromLine = (ctx, width, height, xOffset, yOffset) => {
-        const lineY = getDetectedLineY(ctx, width, height);
-        if (lineY <= 0) return null; // No line detected
-
-        const cropCanvas = document.createElement('canvas');
-        const cropH = height - lineY;
-        cropCanvas.width = width;
-        cropCanvas.height = cropH;
-        const cropCtx = cropCanvas.getContext('2d');
-        // Draw the portion from lineY downward, keeping original width
-        cropCtx.drawImage(ctx.canvas, 0, lineY, width, cropH, 0, 0, width, cropH);
-
-        return { croppedCanvas: cropCanvas, lineY };
     };
 
     const detectHorizontalOffset = (ctx, width, height) => {
@@ -336,6 +597,91 @@ const App = () => {
         ];
     };
 
+    // --- Offset Detection from Image URL (async helper) ---
+    const detectOffsetsFromImage = (imageUrl) => {
+        return new Promise((resolve) => {
+            const img = new Image();
+            img.onload = () => {
+                const canvas = document.createElement('canvas');
+                canvas.width = img.width;
+                canvas.height = img.height;
+                const ctx = canvas.getContext('2d');
+                ctx.drawImage(img, 0, 0);
+                const yOffset = detectVerticalOffset(ctx, img.width, img.height);
+                const xOffset = detectHorizontalOffset(ctx, img.width, img.height);
+                resolve({ xOffset, yOffset });
+            };
+            img.onerror = () => resolve({ xOffset: 0, yOffset: 0 });
+            img.src = imageUrl;
+        });
+    };
+
+    // --- Template Conversion Helpers ---
+    const regionsToTemplate = (regions, imgW, imgH) => {
+        const idRegions = [];
+        const answerRegions = [];
+        regions.forEach(r => {
+            const base = {
+                xRatio: r.x / imgW,
+                yRatio: r.y / imgH,
+                wRatio: r.w / imgW,
+                hRatio: r.h / imgH,
+                rows: r.rows,
+                cols: r.cols,
+                labels: [...r.labels],
+                gapHeightRatio: r.gapHeightRatio,
+                hasGaps: r.hasGaps,
+            };
+            if (r.type === 'id') {
+                base.suffix = r.id.split('_id_')[1];
+                idRegions.push(base);
+            } else if (r.type === 'answer') {
+                base.startQ = r.startQ;
+                answerRegions.push(base);
+            }
+        });
+        return { idRegions, answerRegions };
+    };
+
+    const templateToRegions = (template, imgW, imgH, pageIdPrefix) => {
+        const regions = [];
+        template.idRegions.forEach((ir, idx) => {
+            // Use stored suffix, or fall back to index-based name to avoid collisions
+            const suffix = ir.suffix || `id${idx + 1}`;
+            regions.push({
+                id: `${pageIdPrefix}_id_${suffix}`,
+                type: 'id',
+                x: imgW * ir.xRatio,
+                y: imgH * ir.yRatio,
+                w: imgW * ir.wRatio,
+                h: imgH * ir.hRatio,
+                rows: ir.rows || 10,
+                cols: ir.cols || 1,
+                labels: (ir.labels && ir.labels.length > 0) ? [...ir.labels] : ['0','1','2','3','4','5','6','7','8','9'],
+                gapHeightRatio: ir.gapHeightRatio ?? 1,
+                hasGaps: ir.hasGaps ?? false,
+            });
+        });
+        template.answerRegions.forEach((ar, i) => {
+            const labels = (ar.labels && ar.labels.length > 0) ? [...ar.labels] : ['A','B','C','D'];
+            regions.push({
+                id: `${pageIdPrefix}_b${i + 1}`,
+                type: 'answer',
+                x: imgW * ar.xRatio,
+                y: imgH * ar.yRatio,
+                w: imgW * ar.wRatio,
+                h: imgH * ar.hRatio,
+                rows: ar.rows || 30,
+                cols: ar.cols || labels.length || 4,
+                startQ: ar.startQ || 1,
+                labels: labels,
+                gapHeightRatio: ar.gapHeightRatio ?? 1,
+                hasGaps: ar.hasGaps ?? false,
+            });
+        });
+        return regions;
+    };
+
     // --- File Handling ---
     const handleFileUpload = async (e) => {
         const uploadedFile = e.target.files[0];
@@ -364,12 +710,14 @@ const App = () => {
                 const yOffset = detectVerticalOffset(ctx, img.width, img.height);
                 const xOffset = detectHorizontalOffset(ctx, img.width, img.height);
                 const detectedLineY = getDetectedLineY(ctx, img.width, img.height);
+                const detectedLineX = getDetectedLineX(ctx, img.width, img.height);
                 setPages([{
                     id: 0,
                     imageUrl: e.target.result,
                     width: img.width,
                     height: img.height,
                     detectedLineY: detectedLineY > 0 ? detectedLineY : null,
+                    detectedLineX: detectedLineX > 0 ? detectedLineX : null,
                     results: {},
                     regions: getStandardRegions(img.width, img.height, 'p0', xOffset, yOffset)
                 }]);
@@ -414,12 +762,14 @@ const App = () => {
                 const yOffset = detectVerticalOffset(context, canvas.width, canvas.height);
                 const xOffset = detectHorizontalOffset(context, canvas.width, canvas.height);
                 const detectedLineY = getDetectedLineY(context, canvas.width, canvas.height);
+                const detectedLineX = getDetectedLineX(context, canvas.width, canvas.height);
                 loadedPages.push({
                     id: i - 1,
                     imageUrl: canvas.toDataURL(),
                     width: canvas.width,
                     height: canvas.height,
                     detectedLineY: detectedLineY > 0 ? detectedLineY : null,
+                    detectedLineX: detectedLineX > 0 ? detectedLineX : null,
                     results: {},
                     regions: getStandardRegions(canvas.width, canvas.height, `p${i - 1}`, xOffset, yOffset)
                 });
@@ -439,27 +789,154 @@ const App = () => {
         }
     };
 
-    const resetTemplate = () => {
-        if (!currentPage) return;
-        const img = new Image();
-        img.onload = () => {
-            const canvas = document.createElement('canvas');
-            canvas.width = img.width;
-            canvas.height = img.height;
-            const ctx = canvas.getContext('2d');
-            ctx.drawImage(img, 0, 0);
-            const yOffset = detectVerticalOffset(ctx, img.width, img.height);
-            const xOffset = detectHorizontalOffset(ctx, img.width, img.height);
-            const newRegions = getStandardRegions(currentPage.width, currentPage.height, `p${currentPageIndex}`, xOffset, yOffset);
-            setPages(prev => prev.map((p, idx) => {
-                if (idx === currentPageIndex) {
-                    return { ...p, regions: newRegions, results: {} };
-                }
-                return p;
-            }));
+    // --- Template CRUD ---
+    const saveAsTemplate = async () => {
+        if (!currentPage || !newTemplateName.trim()) return;
+        const { idRegions, answerRegions } = regionsToTemplate(
+            currentPage.regions, currentPage.width, currentPage.height
+        );
+        // Capture source page offsets so we can re-align when applying to other pages
+        const { xOffset, yOffset } = await detectOffsetsFromImage(currentPage.imageUrl, currentPage.width, currentPage.height);
+        const newTemplate = {
+            id: Date.now().toString(),
+            name: newTemplateName.trim(),
+            createdAt: new Date().toISOString(),
+            idRegions,
+            answerRegions,
+            sourceXOffset: xOffset,
+            sourceYOffset: yOffset,
         };
-        img.src = currentPage.imageUrl;
-    }
+        setTemplates(prev => [...prev, newTemplate]);
+        setLastAppliedTemplateId(newTemplate.id);
+        setNewTemplateName('');
+        setShowSaveTemplateModal(false);
+        setToast(`Template "${newTemplate.name}" saved!`);
+        setTimeout(() => setToast(null), 3000);
+    };
+
+    const applyTemplate = async (template) => {
+        setIsProcessing(true);
+        setProgress({ current: 0, total: pages.length });
+        const sourceX = template.sourceXOffset || 0;
+        const sourceY = template.sourceYOffset || 0;
+        const tplUseY = template.useAlignmentY !== false; // default true
+        const tplUseX = template.useAlignmentX !== false; // default true
+        const updatedPages = [];
+        for (let i = 0; i < pages.length; i++) {
+            setProgress({ current: i + 1, total: pages.length });
+            const page = pages[i];
+            const { xOffset, yOffset } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height);
+            // Differential shift: how much this page's content moved vs. the source page
+            // Only shift on axes where alignment is enabled
+            const dx = tplUseX ? (xOffset - sourceX) : 0;
+            const dy = tplUseY ? (yOffset - sourceY) : 0;
+            const baseRegions = templateToRegions(template, page.width, page.height, `p${page.id}`);
+            const shiftedRegions = baseRegions.map(r => ({ ...r, x: r.x + dx, y: r.y + dy }));
+            updatedPages.push({ ...page, regions: shiftedRegions, results: {} });
+        }
+        setPages(updatedPages);
+        setIsProcessing(false);
+        setShowResults(false);
+        setLastAppliedTemplateId(template.id);
+        setToast(`Template "${template.name}" applied & aligned to all pages!`);
+        setTimeout(() => setToast(null), 3000);
+    };
+
+    // Auto-apply last used template (or default) whenever new pages are loaded
+    const prevPagesRef = useRef(null);
+    useEffect(() => {
+        // Only auto-apply on initial load (when going from 0 pages → N pages)
+        const prev = prevPagesRef.current;
+        if (prev != null && prev === 0 && pages.length > 0) {
+            const tplId = lastAppliedTemplateId || DEFAULT_TEMPLATE_ID;
+            const tpl = tplId === DEFAULT_TEMPLATE_ID
+                ? getDefaultTemplate()
+                : templates.find(t => t.id === tplId);
+            if (tpl) {
+                // Apply silently without showing toast
+                (async () => {
+                    setIsProcessing(true);
+                    setProgress({ current: 0, total: pages.length });
+                    const sourceX = tpl.sourceXOffset || 0;
+                    const sourceY = tpl.sourceYOffset || 0;
+                    const useY = tpl.useAlignmentY !== false;
+                    const useX = tpl.useAlignmentX !== false;
+                    const updatedPages = [];
+                    for (let i = 0; i < pages.length; i++) {
+                        setProgress({ current: i + 1, total: pages.length });
+                        const page = pages[i];
+                        const { xOffset, yOffset } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height);
+                        const dx = useX ? (xOffset - sourceX) : 0;
+                        const dy = useY ? (yOffset - sourceY) : 0;
+                        const baseRegions = templateToRegions(tpl, page.width, page.height, `p${page.id}`);
+                        updatedPages.push({ ...page, regions: baseRegions.map(r => ({ ...r, x: r.x + dx, y: r.y + dy })), results: {} });
+                    }
+                    setPages(updatedPages);
+                    setIsProcessing(false);
+                })();
+            }
+        }
+        prevPagesRef.current = pages.length;
+    }, [pages.length]);
+
+    // Edit existing template in draw mode
+    const editTemplate = (template) => {
+        if (!currentPage) return;
+        const allRegions = [
+            ...(template.idRegions || []).map((r, i) => ({ ...r, blockType: 'id', uid: `edit_id_${Date.now()}_${i}` })),
+            ...(template.answerRegions || []).map((r, i) => ({ ...r, blockType: 'answer', uid: `edit_ans_${Date.now()}_${i}` })),
+        ];
+        // Convert decimal ratios (0-1) to percentage (0-100) and load
+        const loadedBlocks = allRegions.map(r => ({
+            uid: r.uid,
+            xRatio: r.xRatio * 100,
+            yRatio: r.yRatio * 100,
+            wRatio: r.wRatio * 100,
+            hRatio: r.hRatio * 100,
+            blockType: r.blockType,
+            rows: r.rows || 5,
+            cols: r.cols || 4,
+            labels: r.labels || ['A','B','C','D'],
+            startQ: r.startQ || 1,
+            suffix: r.suffix || '',
+            hasGaps: r.hasGaps ?? false,
+            gapHeightRatio: r.gapHeightRatio ?? 1,
+        }));
+        // Compute next Q
+        let maxQ = 1;
+        loadedBlocks.forEach(b => {
+            if (b.blockType === 'answer') {
+                let qCount = 0;
+                for (let r = 0; r < b.rows; r++) if (!b.hasGaps || (r+1)%6!==0) qCount++;
+                const endQ = (b.startQ || 1) + qCount;
+                if (endQ > maxQ) maxQ = endQ;
+            }
+        });
+        // Enter draw mode with loaded blocks
+        setDrawMode(true);
+        setDrawnBlocks(loadedBlocks);
+        setCurrentDraw(null);
+        setSelectedDrawnBlock(null);
+        setDrawNextQ(maxQ);
+        setDrawTemplateMode('naming'); // skip straight to naming since we're editing
+        setDrawTemplateName(template.name);
+        setSelectedRegionId(null);
+        // Track which template we're editing so save overwrites instead of duplicating
+        setEditingTemplateId(template.id);
+        setDrawLineY(currentPage.detectedLineY || Math.round(currentPage.height * 0.227));
+        setDrawLineX(currentPage.detectedLineX || Math.round(currentPage.width * 0.355));
+        setIsDraggingLineY(false);
+        setIsDraggingLineX(false);
+        setUseLineY(template.useAlignmentY !== false);
+        setUseLineX(template.useAlignmentX !== false);
+    };
+
+    const deleteTemplate = (templateId) => {
+        const tpl = templates.find(t => t.id === templateId);
+        setTemplates(prev => prev.filter(t => t.id !== templateId));
+        setToast(`Template${tpl ? ` "${tpl.name}"` : ''} deleted.`);
+        setTimeout(() => setToast(null), 3000);
+    };
 
     // --- Canvas Drawing ---
     useEffect(() => {
@@ -471,6 +948,113 @@ const App = () => {
             canvas.width = img.width * scale;
             canvas.height = img.height * scale;
             ctx.drawImage(img, 0, 0, canvas.width, canvas.height);
+
+            // In draw mode, dim existing regions and draw drawn blocks instead
+            if (drawMode) {
+                // Dim the image slightly
+                ctx.fillStyle = 'rgba(0, 0, 0, 0.3)';
+                ctx.fillRect(0, 0, canvas.width, canvas.height);
+
+                // Draw existing regions very faintly
+                const regionsToDraw = currentPage.regions || [];
+                regionsToDraw.forEach(region => {
+                    ctx.strokeStyle = 'rgba(125, 133, 144, 0.15)';
+                    ctx.lineWidth = 1;
+                    ctx.strokeRect(region.x * scale, region.y * scale, region.w * scale, region.h * scale);
+                });
+
+                // Draw drawn blocks
+                drawnBlocks.forEach(block => {
+                    const x = (currentPage.width * block.xRatio / 100) * scale;
+                    const y = (currentPage.height * block.yRatio / 100) * scale;
+                    const w = (currentPage.width * block.wRatio / 100) * scale;
+                    const h = (currentPage.height * block.hRatio / 100) * scale;
+
+                    const isSelected = block.uid === selectedDrawnBlock;
+                    if (block.blockType === 'id') {
+                        ctx.strokeStyle = isSelected ? '#58a6ff' : '#1f6feb';
+                        ctx.fillStyle = isSelected ? 'rgba(31, 111, 235, 0.15)' : 'rgba(31, 111, 235, 0.08)';
+                    } else {
+                        ctx.strokeStyle = isSelected ? '#3fb950' : '#238636';
+                        ctx.fillStyle = isSelected ? 'rgba(35, 134, 54, 0.15)' : 'rgba(35, 134, 54, 0.08)';
+                    }
+                    ctx.lineWidth = isSelected ? 3 : 2;
+                    ctx.fillRect(x, y, w, h);
+                    ctx.strokeRect(x, y, w, h);
+
+                    // Draw label
+                    ctx.fillStyle = isSelected ? '#fff' : '#e6edf3';
+                    ctx.font = 'bold 14px sans-serif';
+                    const labelText = block.blockType === 'id'
+                        ? `ID: ${block.suffix || '?'}`
+                        : `Q${block.startQ}+ (${block.rows}r×${block.cols}c)`;
+                    // Background for text
+                    const textW = ctx.measureText(labelText).width;
+                    ctx.fillStyle = isSelected ? 'rgba(31, 111, 235, 0.9)' : 'rgba(0,0,0,0.7)';
+                    ctx.fillRect(x, y - 20, textW + 10, 18);
+                    ctx.fillStyle = '#fff';
+                    ctx.fillText(labelText, x + 5, y - 6);
+                });
+
+                // Draw the detected/adjusted HORIZONTAL alignment line
+                if (useLineY && drawLineY != null) {
+                    const lineYScaled = drawLineY * scale;
+                    ctx.strokeStyle = isDraggingLineY ? '#d29922' : '#f0883e';
+                    ctx.lineWidth = isDraggingLineY ? 4 : 2;
+                    ctx.setLineDash([10, 6]);
+                    ctx.beginPath();
+                    ctx.moveTo(0, lineYScaled);
+                    ctx.lineTo(canvas.width, lineYScaled);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    // Label
+                    const labelText = '⟷ H-Line (drag to adjust)';
+                    ctx.font = 'bold 12px sans-serif';
+                    const textW = ctx.measureText(labelText).width;
+                    ctx.fillStyle = isDraggingLineY ? 'rgba(210, 153, 34, 0.95)' : 'rgba(240, 136, 62, 0.9)';
+                    ctx.fillRect(canvas.width - textW - 14, lineYScaled - 22, textW + 10, 18);
+                    ctx.fillStyle = '#fff';
+                    ctx.fillText(labelText, canvas.width - textW - 9, lineYScaled - 8);
+                }
+
+                // Draw the detected/adjusted VERTICAL alignment line
+                if (useLineX && drawLineX != null) {
+                    const lineXScaled = drawLineX * scale;
+                    ctx.strokeStyle = isDraggingLineX ? '#d29922' : '#a371f7';
+                    ctx.lineWidth = isDraggingLineX ? 4 : 2;
+                    ctx.setLineDash([10, 6]);
+                    ctx.beginPath();
+                    ctx.moveTo(lineXScaled, 0);
+                    ctx.lineTo(lineXScaled, canvas.height);
+                    ctx.stroke();
+                    ctx.setLineDash([]);
+                    // Label (rotated vertically alongside the line)
+                    const labelText = '⟷ V-Line (drag)';
+                    ctx.font = 'bold 12px sans-serif';
+                    const textW = ctx.measureText(labelText).width;
+                    ctx.fillStyle = isDraggingLineX ? 'rgba(210, 153, 34, 0.95)' : 'rgba(163, 113, 247, 0.9)';
+                    ctx.fillRect(lineXScaled + 6, 8, textW + 10, 18);
+                    ctx.fillStyle = '#fff';
+                    ctx.fillText(labelText, lineXScaled + 11, 21);
+                }
+
+                // Draw current rectangle being drawn
+                if (currentDraw) {
+                    const x = Math.min(currentDraw.startX, currentDraw.endX) * scale;
+                    const y = Math.min(currentDraw.startY, currentDraw.endY) * scale;
+                    const w = Math.abs(currentDraw.endX - currentDraw.startX) * scale;
+                    const h = Math.abs(currentDraw.endY - currentDraw.startY) * scale;
+                    ctx.strokeStyle = '#d29922';
+                    ctx.fillStyle = 'rgba(210, 153, 34, 0.1)';
+                    ctx.lineWidth = 2;
+                    ctx.setLineDash([6, 4]);
+                    ctx.fillRect(x, y, w, h);
+                    ctx.strokeRect(x, y, w, h);
+                    ctx.setLineDash([]);
+                }
+                return;
+            }
+
             const regionsToDraw = currentPage.regions || [];
             regionsToDraw.forEach(region => {
                 // GitHub Focus Blue for selection
@@ -557,7 +1141,7 @@ const App = () => {
             });
         };
         img.src = currentPage.imageUrl;
-    }, [currentPage, scale, selectedRegionId, parsedAnswerKey]);
+    }, [currentPage, scale, selectedRegionId, parsedAnswerKey, drawMode, drawnBlocks, currentDraw, selectedDrawnBlock, drawLineY, drawLineX, isDraggingLineY, isDraggingLineX, useLineY, useLineX]);
 
     // --- Mouse Interactions ---
     const [isDragging, setIsDragging] = useState(false);
@@ -569,6 +1153,53 @@ const App = () => {
         const rect = canvasRef.current.getBoundingClientRect();
         const x = (e.clientX - rect.left) / scale;
         const y = (e.clientY - rect.top) / scale;
+
+        if (drawMode) {
+            const tolerance = Math.max(6, 12 / scale);
+            // First: check if clicking near the HORIZONTAL alignment line
+            if (useLineY && drawLineY != null) {
+                if (Math.abs(y - drawLineY) <= tolerance) {
+                    setIsDraggingLineY(true);
+                    setSelectedDrawnBlock(null);
+                    setCurrentDraw(null);
+                    return;
+                }
+            }
+            // Then: check if clicking near the VERTICAL alignment line
+            if (useLineX && drawLineX != null) {
+                if (Math.abs(x - drawLineX) <= tolerance) {
+                    setIsDraggingLineX(true);
+                    setSelectedDrawnBlock(null);
+                    setCurrentDraw(null);
+                    return;
+                }
+            }
+            // Check if clicking on an existing drawn block
+            const clickedBlock = drawnBlocks.find(b => {
+                const bx = currentPage.width * b.xRatio / 100;
+                const by = currentPage.height * b.yRatio / 100;
+                const bw = currentPage.width * b.wRatio / 100;
+                const bh = currentPage.height * b.hRatio / 100;
+                return x >= bx && x <= bx + bw && y >= by && y <= by + bh;
+            });
+            if (clickedBlock) {
+                setSelectedDrawnBlock(clickedBlock.uid);
+                // Allow dragging the block
+                setIsDragging(true);
+                setDragStart({ x, y });
+                setActiveRegionStart({
+                    x: currentPage.width * clickedBlock.xRatio / 100,
+                    y: currentPage.height * clickedBlock.yRatio / 100,
+                });
+                setSelectedDrawnBlockId(clickedBlock.uid);
+                return;
+            }
+            // Start drawing a new rectangle
+            setSelectedDrawnBlock(null);
+            setCurrentDraw({ startX: x, startY: y, endX: x, endY: y });
+            return;
+        }
+
         const regionsToCheck = currentPage.regions || [];
         const clickedRegion = regionsToCheck.find(r => x >= r.x && x <= r.x + r.w && y >= r.y && y <= r.y + r.h);
         if (clickedRegion) {
@@ -581,10 +1212,46 @@ const App = () => {
         }
     };
 
+    const [selectedDrawnBlockId, setSelectedDrawnBlockId] = useState(null);
+
     const handleMouseMove = (e) => {
         const rect = canvasRef.current.getBoundingClientRect();
         const currentX = (e.clientX - rect.left) / scale;
         const currentY = (e.clientY - rect.top) / scale;
+
+        if (drawMode && isDraggingLineY) {
+            // Drag the horizontal alignment line
+            setDrawLineY(Math.max(0, Math.min(currentPage.height, currentY)));
+            return;
+        }
+
+        if (drawMode && isDraggingLineX) {
+            // Drag the vertical alignment line
+            setDrawLineX(Math.max(0, Math.min(currentPage.width, currentX)));
+            return;
+        }
+
+        if (drawMode && currentDraw) {
+            // Update drawing rectangle
+            setCurrentDraw(prev => ({ ...prev, endX: currentX, endY: currentY }));
+            return;
+        }
+
+        if (drawMode && isDragging && selectedDrawnBlockId) {
+            // Drag existing drawn block
+            const dx = currentX - dragStart.x;
+            const dy = currentY - dragStart.y;
+            setDrawnBlocks(prev => prev.map(b => {
+                if (b.uid !== selectedDrawnBlockId) return b;
+                return {
+                    ...b,
+                    xRatio: ((activeRegionStart.x + dx) / currentPage.width) * 100,
+                    yRatio: ((activeRegionStart.y + dy) / currentPage.height) * 100,
+                };
+            }));
+            return;
+        }
+
         if (isDragging && selectedRegionId) {
             const dx = currentX - dragStart.x;
             const dy = currentY - dragStart.y;
@@ -603,7 +1270,43 @@ const App = () => {
         }
     };
 
-    const handleMouseUp = (e) => {
+    const handleMouseUp = () => {
+        if (drawMode && (isDraggingLineY || isDraggingLineX)) {
+            setIsDraggingLineY(false);
+            setIsDraggingLineX(false);
+            return;
+        }
+        if (drawMode && currentDraw && currentPage) {
+            // Finalize drawn rectangle
+            const x = Math.min(currentDraw.startX, currentDraw.endX);
+            const y = Math.min(currentDraw.startY, currentDraw.endY);
+            const w = Math.abs(currentDraw.endX - currentDraw.startX);
+            const h = Math.abs(currentDraw.endY - currentDraw.startY);
+            if (w > 10 && h > 10) {
+                const newBlock = {
+                    uid: Date.now() + Math.random(),
+                    xRatio: (x / currentPage.width) * 100,
+                    yRatio: (y / currentPage.height) * 100,
+                    wRatio: (w / currentPage.width) * 100,
+                    hRatio: (h / currentPage.height) * 100,
+                    blockType: 'answer',
+                    rows: 5, cols: 4,
+                    labels: ['A','B','C','D'],
+                    startQ: drawNextQ,
+                    suffix: '',
+                    hasGaps: false,
+                    gapHeightRatio: 1,
+                };
+                // Auto-count questions
+                let qCount = 0;
+                for (let r = 0; r < newBlock.rows; r++) if (!newBlock.hasGaps || (r+1) % 6 !== 0) qCount++;
+                setDrawNextQ(prev => prev + qCount);
+                setDrawnBlocks(prev => [...prev, newBlock]);
+                setSelectedDrawnBlock(newBlock.uid);
+            }
+            setCurrentDraw(null);
+            return;
+        }
         setIsDragging(false);
     };
 
@@ -710,8 +1413,8 @@ const App = () => {
                                     const cy = Math.floor(region.y + rowConfig.y);
                                     const cw = Math.floor(cellW);
                                     const ch = Math.floor(rowConfig.h);
-                                    const paddingX = cw * 0.30;
-                                    const paddingY = ch * 0.30;
+                                    const paddingX = cw * 0.15;
+                                    const paddingY = ch * 0.15;
                                     let darkPixelCount = 0;
                                     let totalPixelCount = 0;
                                     for (let py = cy + paddingY; py < cy + ch - paddingY; py++) {
@@ -733,11 +1436,11 @@ const App = () => {
                                 let label = '';
                                 let selectedIndex = -1;
 
-                                // Original Robust Answer Logic
-                                if ((maxFill - minFill) < 0.1 || maxFill < 0.5) {
+                                // Robust Answer Logic — tuned for custom templates
+                                if ((maxFill - minFill) < 0.08 || maxFill < 0.35) {
                                     label = 'BLANK';
                                 }
-                                else if ((maxFill - secondMaxFill) < 0.13) {
+                                else if ((maxFill - secondMaxFill) < 0.10) {
                                     label = 'MULT';
                                 }
                                 else {
@@ -769,54 +1472,15 @@ const App = () => {
             // Use answer key length
             newPages.forEach(page => {
                 Object.keys(page.results).forEach(key => {
-                    if (key.includes('_b1') || key.includes('_b2')) page.results[key] = page.results[key].filter(r => r.qNum <= keyCount);
+                    if (/_b\d+$/.test(key)) page.results[key] = page.results[key].filter(r => r.qNum <= keyCount);
                 });
             });
-        } else {
-            // Auto-detect cutoff: Find first question with >50% blanks
-            const allAnswers = {}; // qNum -> { blanks: 0, total: 0 }
-            
-            // Collect statistics across all pages
-            newPages.forEach(page => {
-                Object.keys(page.results).forEach(key => {
-                    if (key.includes('_b1') || key.includes('_b2')) {
-                        page.results[key].forEach(r => {
-                            if (!allAnswers[r.qNum]) {
-                                allAnswers[r.qNum] = { blanks: 0, total: 0 };
-                            }
-                            allAnswers[r.qNum].total++;
-                            if (r.label === 'BLANK') {
-                                allAnswers[r.qNum].blanks++;
-                            }
-                        });
-                    }
-                });
-            });
-
-            // Find first question with >50% blanks
-            let cutoffQuestion = -1;
-            const sortedQNums = Object.keys(allAnswers).map(Number).sort((a, b) => a - b);
-            
-            for (const qNum of sortedQNums) {
-                const stats = allAnswers[qNum];
-                const blankPercentage = stats.blanks / stats.total;
-                if (blankPercentage > 0.5) {
-                    cutoffQuestion = qNum;
-                    break;
-                }
-            }
-
-            // Apply filtering
-            if (cutoffQuestion !== -1) {
-                newPages.forEach(page => {
-                    Object.keys(page.results).forEach(key => {
-                        if (key.includes('_b1') || key.includes('_b2')) {
-                            page.results[key] = page.results[key].filter(r => r.qNum < cutoffQuestion);
-                        }
-                    });
-                });
-            }
         }
+        // NOTE: Auto-cutoff based on blank-detection has been removed.
+        // It was causing all answers except Q1 to be filtered out when scanning
+        // sheets with many blank responses (which is normal for MC sheets).
+        // To filter to a specific question count, provide an Answer Key —
+        // its length is used as the cutoff.
 
         setPages(newPages);
         setIsProcessing(false);
@@ -1084,6 +1748,71 @@ const App = () => {
         </div>
     );
 
+    // --- Template Section UI ---
+    const renderTemplateSection = () => (
+        <div className="space-y-2">
+            <button onClick={() => setIsTemplateSectionOpen(!isTemplateSectionOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-[#7d8590] tracking-wider hover:text-[#e6edf3] bg-[#21262d] p-2 rounded border border-[#30363d] transition-colors">
+                <div className="flex items-center gap-2"><LayoutTemplate className="w-4 h-4" /> Templates</div>
+                {isTemplateSectionOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
+            </button>
+
+            {isTemplateSectionOpen && (
+                <div className="bg-[#161b22] p-2 rounded-lg border border-[#30363d] space-y-2">
+                    {allTemplates.length === 0 ? (
+                        <p className="text-xs text-[#7d8590] text-center py-2 italic">No templates available.</p>
+                    ) : (
+                        <div className="space-y-1 max-h-48 overflow-y-auto">
+                            {allTemplates.map(t => {
+                                const totalQs = t.answerRegions.reduce((sum, ar) => {
+                                    let q = 0; for (let r = 0; r < ar.rows; r++) if (!ar.hasGaps || (r+1)%6!==0) q++;
+                                    return sum + q;
+                                }, 0);
+                                const isDefault = t.id === DEFAULT_TEMPLATE_ID;
+                                const isLastUsed = t.id === lastAppliedTemplateId;
+                                return (
+                                    <div key={t.id} className="flex items-center gap-1">
+                                        <button
+                                            onClick={() => applyTemplate(t)}
+                                            disabled={pages.length === 0}
+                                            className={`flex-1 text-left px-2 py-1.5 rounded text-xs truncate disabled:opacity-40 disabled:cursor-not-allowed transition-colors flex items-center gap-1 ${isDefault ? 'bg-[#1f6feb]/10 border border-[#1f6feb]/30 text-[#58a6ff] hover:bg-[#1f6feb]/20' : 'bg-[#21262d] border border-[#30363d] hover:bg-[#30363d] text-[#c9d1d9]'}`}
+                                            title={`Apply "${t.name}" to all pages${isLastUsed ? ' (currently active)' : ''}`}
+                                        >
+                                            {isLastUsed && <CheckCircle2 className="w-3 h-3 text-[#3fb950] flex-shrink-0" />}
+                                            <span className="font-medium truncate">{t.name}</span>
+                                            <span className="text-[#7d8590] ml-auto">({t.idRegions.length} ID, {totalQs}Q)</span>
+                                        </button>
+                                        {!isDefault && (
+                                            <>
+                                                <button onClick={() => editTemplate(t)} className="p-1 text-[#58a6ff] hover:text-[#79c0ff] bg-transparent rounded hover:bg-[#1f6feb]/10 transition-colors flex-shrink-0" title="Edit template" disabled={!currentPage}>
+                                                    <Settings className="w-3 h-3" />
+                                                </button>
+                                                <button
+                                                    onClick={() => deleteTemplate(t.id)}
+                                                    className="p-1.5 text-[#f85149] hover:text-[#ff7b72] bg-transparent rounded hover:bg-[#f85149]/10 transition-colors flex-shrink-0"
+                                                    title="Delete template"
+                                                >
+                                                    <Trash2 className="w-3 h-3" />
+                                                </button>
+                                            </>
+                                        )}
+                                    </div>
+                                );
+                            })}
+                        </div>
+                    )}
+                    {/* Add New Template Button (under the list) */}
+                    <button
+                        onClick={startDrawMode}
+                        disabled={!currentPage}
+                        className="w-full py-2 text-xs font-medium text-[#d29922] bg-[#d29922]/10 rounded border border-[#d29922]/30 hover:bg-[#d29922]/20 transition-colors flex justify-center items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed"
+                    >
+                        <Plus className="w-3 h-3" /> Add New Template
+                    </button>
+                </div>
+            )}
+        </div>
+    );
+
     // --- Manual ID Editing ---
     const updateIdResult = (regionId, newLabel) => {
         setPages(prevPages => prevPages.map((p, idx) => {
@@ -1098,15 +1827,14 @@ const App = () => {
         }));
     };
 
-    const getIdValue = (suffix) => {
+    const getIdValueByRegionId = (regionId) => {
         if (!currentPage || !currentPage.results) return '?';
-        return getIdValueForPage(currentPageIndex, suffix);
+        return getIdValueByRegionIdForPage(currentPageIndex, regionId);
     };
 
-    const getIdValueForPage = (pageIdx, suffix) => {
+    const getIdValueByRegionIdForPage = (pageIdx, regionId) => {
         const page = pages[pageIdx];
         if (!page || !page.results) return '?';
-        const regionId = `p${page.id}_id_${suffix}`;
         const res = page.results[regionId];
         if (!res || res.length === 0) return '?';
         const label = res[0].label;
@@ -1118,10 +1846,10 @@ const App = () => {
         const result = [];
         pages.forEach((page, index) => {
             if (!page.results) { result.push(index); return; }
-            const suffixes = ['level', 'letter', 'n1', 'n2'];
-            const hasIncomplete = suffixes.some(suffix => {
-                const regionId = `p${page.id}_id_${suffix}`;
-                const res = page.results[regionId];
+            const idRegions = (page.regions || []).filter(r => r.type === 'id');
+            if (idRegions.length === 0) { result.push(index); return; }
+            const hasIncomplete = idRegions.some(r => {
+                const res = page.results[r.id];
                 if (!res || res.length === 0) return true;
                 const label = res[0].label;
                 return !label || label === '?' || label === 'BLANK' || label === 'MULT';
@@ -1131,10 +1859,7 @@ const App = () => {
         return result;
     };
 
-    const updateIdResultForPage = (pageIdx, suffix, newLabel) => {
-        const page = pages[pageIdx];
-        if (!page) return;
-        const regionId = `p${page.id}_id_${suffix}`;
+    const updateIdResultForPageByRegionId = (pageIdx, regionId, newLabel) => {
         setPages(prevPages => prevPages.map((p, idx) => {
             if (idx === pageIdx) {
                 const newResults = { ...p.results };
@@ -1225,19 +1950,14 @@ const App = () => {
                                                 <div className="w-full border border-[#30363d] rounded overflow-hidden bg-[#161b22]" style={{ aspectRatio: `${cropW}/${cropH}`, maxHeight: '250px', backgroundImage: `url(${page.imageUrl})`, backgroundSize: `100% ${page.height / cropH * 100}%`, backgroundPosition: '0% 0%', backgroundRepeat: 'no-repeat' }} />
                                             );
                                         })()}
-                                        <div className="flex items-center gap-2 justify-center">
-                                            {[
-                                                { suffix: 'level', options: ['1','2','3','4','5','6','7'], label: 'Form' },
-                                                { suffix: 'letter', options: ['A','B','C','D','E','S'], label: 'Cls' },
-                                                { suffix: 'n1', options: ['0','1','2','3','4','5','6','7','8','9'], label: 'Ten' },
-                                                { suffix: 'n2', options: ['0','1','2','3','4','5','6','7','8','9'], label: 'Unit' }
-                                            ].map((field) => {
-                                                const val = getIdValueForPage(pageIdx, field.suffix);
+                                        <div className="flex items-center gap-2 justify-center flex-wrap">
+                                            {getIdFieldsForPage(pageIdx).map((field) => {
+                                                const val = getIdValueByRegionIdForPage(pageIdx, field.regionId);
                                                 const isIncomplete = val === '?';
                                                 return (
-                                                    <div key={field.suffix} className="flex flex-col items-center gap-1">
+                                                    <div key={field.regionId} className="flex flex-col items-center gap-1">
                                                         <span className="text-[10px] text-[#7d8590] uppercase">{field.label}</span>
-                                                        <select value={val} onChange={(e) => updateIdResultForPage(pageIdx, field.suffix, e.target.value)} className={`text-sm font-bold px-2 py-1.5 rounded border outline-none cursor-pointer ${isIncomplete ? 'bg-[#da3633]/20 border-[#da3633]/40 text-[#f85149]' : 'bg-[#161b22] border-[#238636]/40 text-[#3fb950]'}`}>
+                                                        <select value={val} onChange={(e) => updateIdResultForPageByRegionId(pageIdx, field.regionId, e.target.value)} className={`text-sm font-bold px-2 py-1.5 rounded border outline-none cursor-pointer ${isIncomplete ? 'bg-[#da3633]/20 border-[#da3633]/40 text-[#f85149]' : 'bg-[#161b22] border-[#238636]/40 text-[#3fb950]'}`}>
                                                             <option value="?" disabled>?</option>
                                                             {field.options.map((opt) => (<option key={opt} value={opt}>{opt}</option>))}
                                                         </select>
@@ -1269,6 +1989,168 @@ const App = () => {
                     </div>
                 );
             })()}
+
+            {/* Draw Mode Toolbar (top of screen when drawing) */}
+            {drawMode && (
+                <div className="fixed top-0 left-0 right-0 z-40 bg-[#0d1117] border-b border-[#30363d] px-4 py-2 flex items-center justify-between shadow-lg">
+                    <div className="flex items-center gap-3">
+                        <LayoutTemplate className="w-5 h-5 text-[#d29922]" />
+                        <span className="text-sm font-bold text-[#e6edf3]">Template Builder Mode</span>
+                        <span className="text-xs text-[#7d8590] hidden lg:inline">— Click and drag on the page to draw blocks</span>
+                        {/* Alignment toggles */}
+                        <div className="flex items-center gap-1 ml-2 pl-3 border-l border-[#30363d]">
+                            <button
+                                onClick={() => setUseLineY(v => !v)}
+                                className={`flex items-center gap-1 px-2 py-1 text-xs rounded border transition-colors ${useLineY ? 'bg-[#f0883e]/20 border-[#f0883e]/50 text-[#f0883e]' : 'bg-[#21262d] border-[#30363d] text-[#7d8590] hover:text-[#e6edf3]'}`}
+                                title="Toggle horizontal alignment line"
+                            >
+                                <span className="font-bold">━</span> H-Line
+                            </button>
+                            <button
+                                onClick={() => setUseLineX(v => !v)}
+                                className={`flex items-center gap-1 px-2 py-1 text-xs rounded border transition-colors ${useLineX ? 'bg-[#a371f7]/20 border-[#a371f7]/50 text-[#a371f7]' : 'bg-[#21262d] border-[#30363d] text-[#7d8590] hover:text-[#e6edf3]'}`}
+                                title="Toggle vertical alignment line"
+                            >
+                                <span className="font-bold">┃</span> V-Line
+                            </button>
+                        </div>
+                    </div>
+                    <div className="flex items-center gap-2">
+                        {drawTemplateMode === 'naming' ? (
+                            <>
+                                <input
+                                    type="text"
+                                    placeholder="Template name..."
+                                    value={drawTemplateName}
+                                    onChange={(e) => setDrawTemplateName(e.target.value)}
+                                    onKeyDown={(e) => { if (e.key === 'Enter') saveDrawnTemplate(); }}
+                                    className="p-1.5 text-sm border border-[#30363d] rounded bg-[#0d1117] text-[#e6edf3] outline-none w-48"
+                                    autoFocus
+                                />
+                                <button onClick={saveDrawnTemplate} disabled={!drawTemplateName.trim() || drawnBlocks.length === 0} className="px-3 py-1.5 text-sm rounded-lg bg-[#238636] text-white hover:bg-[#2ea043] disabled:opacity-50 flex items-center gap-1.5">
+                                    <Save className="w-3.5 h-3.5" /> Save
+                                </button>
+                            </>
+                        ) : (
+                            <>
+                                <span className="text-xs text-[#7d8590] bg-[#21262d] px-2 py-1 rounded">{drawnBlocks.length} block(s) drawn</span>
+                                <button
+                                    onClick={() => setDrawTemplateMode('naming')}
+                                    disabled={drawnBlocks.length === 0}
+                                    className="px-3 py-1.5 text-sm rounded-lg bg-[#238636] text-white hover:bg-[#2ea043] disabled:opacity-50 flex items-center gap-1.5"
+                                >
+                                    <Save className="w-3.5 h-3.5" /> Save Template
+                                </button>
+                            </>
+                        )}
+                        <button onClick={cancelDrawMode} className="px-3 py-1.5 text-sm rounded-lg border border-[#30363d] bg-[#21262d] text-[#f85149] hover:bg-[#30363d] flex items-center gap-1.5">
+                            <X className="w-3.5 h-3.5" /> Cancel
+                        </button>
+                    </div>
+                </div>
+            )}
+
+            {/* Draw Mode: Floating Block Config Panel */}
+            {drawMode && selectedDrawnBlock && (() => {
+                const block = drawnBlocks.find(b => b.uid === selectedDrawnBlock);
+                if (!block) return null;
+                return (
+                    <div className="fixed right-4 top-20 z-40 w-72 bg-[#0d1117] border border-[#30363d] rounded-xl shadow-2xl flex flex-col max-h-[80vh]">
+                        <div className="px-4 py-3 border-b border-[#30363d] flex justify-between items-center bg-[#161b22] rounded-t-xl">
+                            <span className="text-sm font-bold text-[#e6edf3]">Configure Block</span>
+                            <button onClick={() => setSelectedDrawnBlock(null)} className="text-[#7d8590] hover:text-[#e6edf3]">
+                                <X className="w-4 h-4" />
+                            </button>
+                        </div>
+                        <div className="p-4 space-y-3 overflow-y-auto">
+                            {/* Block Type */}
+                            <div>
+                                <label className="text-xs text-[#7d8590] block mb-1">Block Type</label>
+                                <select value={block.blockType} onChange={(e) => updateDrawnBlock(block.uid, 'blockType', e.target.value)} className="w-full p-1.5 text-sm border border-[#30363d] rounded bg-[#0d1117] text-[#e6edf3] outline-none">
+                                    <option value="answer">✏️ Answer Block (MC Questions)</option>
+                                    <option value="id">📋 ID Block (Student ID)</option>
+                                </select>
+                            </div>
+
+                            {/* ID Block Fields */}
+                            {block.blockType === 'id' && (
+                                <>
+                                    <div>
+                                        <label className="text-xs text-[#7d8590] block mb-1">Suffix (ID name)</label>
+                                        <input type="text" value={block.suffix} onChange={(e) => updateDrawnBlock(block.uid, 'suffix', e.target.value.replace(/\s/g, ''))} className="w-full p-1.5 text-sm border border-[#30363d] rounded bg-[#0d1117] text-[#e6edf3] outline-none" placeholder="e.g. level, class, n1" />
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-[#7d8590] block mb-1">Labels (comma-separated)</label>
+                                        <input type="text" value={block.labelsText ?? block.labels.join(', ')} onChange={(e) => updateDrawnBlock(block.uid, 'labels', e.target.value)} className="w-full p-1.5 text-sm border border-[#30363d] rounded bg-[#0d1117] text-[#e6edf3] outline-none" placeholder="0, 1, 2, 3..." />
+                                    </div>
+                                </>
+                            )}
+
+                            {/* Answer Block Fields */}
+                            {block.blockType === 'answer' && (
+                                <>
+                                    <div className="grid grid-cols-2 gap-2">
+                                        <div>
+                                            <label className="text-xs text-[#7d8590] block mb-1">Start Q#</label>
+                                            <input type="number" min="1" value={block.startQ} onChange={(e) => updateDrawnBlock(block.uid, 'startQ', parseInt(e.target.value) || 1)} className="w-full p-1.5 text-sm border border-[#30363d] rounded bg-[#0d1117] text-[#e6edf3] outline-none" />
+                                        </div>
+                                        <div>
+                                            <label className="text-xs text-[#7d8590] block mb-1">Rows</label>
+                                            <input type="number" min="1" value={block.rows} onChange={(e) => updateDrawnBlock(block.uid, 'rows', Math.max(1, parseInt(e.target.value) || 1))} className="w-full p-1.5 text-sm border border-[#30363d] rounded bg-[#0d1117] text-[#e6edf3] outline-none" />
+                                        </div>
+                                    </div>
+                                    <div>
+                                        <label className="text-xs text-[#7d8590] block mb-1">Labels (comma-separated)</label>
+                                        <input type="text" value={block.labelsText ?? block.labels.join(', ')} onChange={(e) => updateDrawnBlock(block.uid, 'labels', e.target.value)} className="w-full p-1.5 text-sm border border-[#30363d] rounded bg-[#0d1117] text-[#e6edf3] outline-none" placeholder="A, B, C, D" />
+                                    </div>
+                                </>
+                            )}
+
+                            {/* Delete button */}
+                            <button onClick={() => removeDrawnBlock(block.uid)} className="w-full py-2 text-xs font-medium text-[#f85149] bg-[#f85149]/10 rounded border border-[#f85149]/30 hover:bg-[#f85149]/20 transition-colors flex justify-center items-center gap-1.5">
+                                <Trash2 className="w-3 h-3" /> Delete This Block
+                            </button>
+                        </div>
+                    </div>
+                );
+            })()}
+
+            {/* Save Current Layout Modal */}
+            {showSaveTemplateModal && (
+                <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm" onClick={() => { setShowSaveTemplateModal(false); setNewTemplateName(''); }}>
+                    <div className="bg-[#0d1117] border border-[#30363d] rounded-xl shadow-2xl w-full max-w-md mx-4" onClick={(e) => e.stopPropagation()}>
+                        <div className="px-6 py-4 border-b border-[#30363d]">
+                            <h2 className="text-lg font-bold text-[#e6edf3] flex items-center gap-2">
+                                <BookmarkPlus className="w-5 h-5 text-[#58a6ff]" />
+                                Save as Template
+                            </h2>
+                        </div>
+                        <div className="p-6 space-y-4">
+                            <p className="text-sm text-[#7d8590]">Save the current region layout as a reusable template. You can apply it to other MC sheets later.</p>
+                            <input
+                                type="text"
+                                placeholder="Template name..."
+                                value={newTemplateName}
+                                onChange={(e) => setNewTemplateName(e.target.value)}
+                                onKeyDown={(e) => { if (e.key === 'Enter') saveAsTemplate(); }}
+                                className="w-full p-2 text-sm border border-[#30363d] rounded bg-[#0d1117] text-[#e6edf3] focus:bg-[#161b22] transition-colors outline-none"
+                                autoFocus
+                            />
+                            <div className="text-xs text-[#7d8590]">
+                                This will save {currentRegions.length} region(s) from Page {currentPageIndex + 1}
+                            </div>
+                        </div>
+                        <div className="px-6 py-4 border-t border-[#30363d] flex justify-end gap-2">
+                            <button onClick={() => { setShowSaveTemplateModal(false); setNewTemplateName(''); }} className="px-4 py-2 text-sm rounded-lg border border-[#30363d] bg-[#21262d] text-[#e6edf3] hover:bg-[#30363d] transition-colors">
+                                Cancel
+                            </button>
+                            <button onClick={saveAsTemplate} disabled={!newTemplateName.trim()} className="px-4 py-2 text-sm rounded-lg bg-[#1f6feb] text-white hover:bg-[#388bfd] disabled:opacity-50 flex items-center gap-2 transition-colors">
+                                <Save className="w-4 h-4" /> Save Template
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            )}
 
             {/* LEFT SIDEBAR */}
             <div className="w-80 bg-[#010409] border-r border-[#30363d] flex flex-col shadow-xl z-10">
@@ -1309,38 +2191,8 @@ const App = () => {
                     {/* 3. Weights */}
                     {renderWeightSettings()}
 
-                    {/* 4. Template Settings Dropdown */}
-                    <div className="space-y-2">
-                        <button onClick={() => setIsTemplateSettingsOpen(!isTemplateSettingsOpen)} className="w-full flex items-center justify-between text-xs font-semibold uppercase text-[#7d8590] tracking-wider hover:text-[#e6edf3] bg-[#21262d] p-2 rounded border border-[#30363d] transition-colors">
-                            <div className="flex items-center gap-2"><LayoutTemplate className="w-4 h-4" />Alignment</div>
-                            {isTemplateSettingsOpen ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-                        </button>
-
-                        {isTemplateSettingsOpen && (
-                            <div className="space-y-4 pt-2">
-                                <div className="p-4 bg-[#161b22] text-sm rounded-lg border border-[#30363d] space-y-2">
-                                    <h3 className="font-bold mb-2 flex items-center gap-2 text-[#58a6ff]"><ScanLine className="w-4 h-4" /> Auto-Align Active</h3>
-                                    <p className="text-xs text-[#7d8590]">Drag <strong>top boxes</strong> to align.</p>
-                                    <button onClick={resetTemplate} className="w-full py-2 mt-2 text-xs font-medium text-white bg-[#1f6feb] rounded-lg hover:bg-[#388bfd] transition-colors flex justify-center items-center gap-2">
-                                        <RotateCw className="w-3 h-3" />
-                                        Realign Boxes
-                                    </button>
-                                </div>
-
-                                {currentRegions.length > 0 && (
-                                    <div className="space-y-2">
-                                        <label className="text-xs font-semibold uppercase text-[#7d8590] tracking-wider">Blocks (Page {currentPageIndex + 1})</label>
-                                        {currentRegions.sort((a, b) => a.y - b.y).map((r, i) => (
-                                            <button key={r.id} onClick={() => setSelectedRegionId(r.id)} className={`w-full text-left px-3 py-2 rounded text-sm flex justify-between items-center ${selectedRegionId === r.id ? 'bg-[#1f6feb]/30 text-[#58a6ff] border border-[#1f6feb]/50' : 'bg-[#21262d] border border-[#30363d] hover:bg-[#30363d] text-[#c9d1d9]'}`}>
-                                                <span>{r.type === 'id' ? (r.id.includes('level') ? 'Form' : r.id.includes('letter') ? 'Class' : 'Number') : `Questions`}</span>
-                                                <ChevronRight className="w-4 h-4 opacity-50" />
-                                            </button>
-                                        ))}
-                                    </div>
-                                )}
-                            </div>
-                        )}
-                    </div>
+                    {/* 4. Custom Templates */}
+                    {renderTemplateSection()}
                 </div>
 
                 {/* Footer */}
@@ -1429,7 +2281,7 @@ const App = () => {
                         </div>
                     ) : currentPage ? (
                         <div className="relative shadow-2xl border border-[#30363d]">
-                            <canvas ref={canvasRef} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} className={`bg-white ${selectedRegionId ? 'cursor-move' : 'cursor-default'}`} />
+                            <canvas ref={canvasRef} onMouseDown={handleMouseDown} onMouseMove={handleMouseMove} onMouseUp={handleMouseUp} onMouseLeave={handleMouseUp} className={`bg-white ${drawMode ? 'cursor-crosshair' : (selectedRegionId ? 'cursor-move' : 'cursor-default')}`} />
                         </div>
                     ) : (
                         <div className="flex flex-col items-center justify-center h-full text-[#7d8590]">
@@ -1443,22 +2295,16 @@ const App = () => {
                 {showResults && currentPage && currentPage.results && (
                     <div className="absolute bottom-0 left-0 right-0 bg-[#010409] border-t border-[#30363d] shadow-xl max-h-[300px] flex flex-col transition-transform z-30">
                         <div className="px-4 py-2 border-b border-[#30363d] flex justify-between items-center bg-[#0d1117]">
-                            <div className="flex items-center gap-2">
+                            <div className="flex items-center gap-2 flex-wrap">
                                 <UserSquare2 className="w-4 h-4 text-[#58a6ff]" />
-                                {[
-                                    { suffix: 'level', options: ['1','2','3','4','5','6','7'], label: 'Form' },
-                                    { suffix: 'letter', options: ['A','B','C','D','E','S'], label: 'Cls' },
-                                    { suffix: 'n1', options: ['0','1','2','3','4','5','6','7','8','9'], label: 'Ten' },
-                                    { suffix: 'n2', options: ['0','1','2','3','4','5','6','7','8','9'], label: 'Unit' }
-                                ].map((field) => {
-                                    const val = getIdValue(field.suffix);
-                                    const regionId = `p${currentPageIndex}_id_${field.suffix}`;
+                                {getIdFieldsForPage(currentPageIndex).map((field) => {
+                                    const val = getIdValueByRegionId(field.regionId);
                                     const isIncomplete = val === '?';
                                     return (
                                         <select
-                                            key={field.suffix}
+                                            key={field.regionId}
                                             value={val}
-                                            onChange={(e) => updateIdResult(regionId, e.target.value)}
+                                            onChange={(e) => updateIdResult(field.regionId, e.target.value)}
                                             className={`text-sm font-bold px-1.5 py-0.5 rounded border outline-none cursor-pointer ${isIncomplete ? 'bg-[#da3633]/20 border-[#da3633]/40 text-[#f85149]' : 'bg-[#161b22] border-[#30363d] text-[#e6edf3] hover:border-[#58a6ff]'}`}
                                             title={field.label}
                                         >

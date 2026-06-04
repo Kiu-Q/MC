@@ -3,3 +3,47 @@ directory = "netlify/functions-internal"
 
 [dev]
 framework = "vite"
+
+# ---------------------------------------------------------------------------
+# Security headers
+# ---------------------------------------------------------------------------
+# Applied to all responses served from the site. Tune the CSP `default-src`
+# and `script-src` lists to match your real production origin(s).
+# ---------------------------------------------------------------------------
+[[headers]]
+  for = "/*"
+  [headers.values]
+    # Strict-Transport-Security: force HTTPS and remember it for 1 year.
+    Strict-Transport-Security = "max-age=31536000; includeSubDomains; preload"
+
+    # X-Content-Type-Options: stop MIME-sniffing.
+    X-Content-Type-Options = "nosniff"
+
+    # X-Frame-Options: prevent clickjacking by forbidding framing.
+    # If you need cross-site framing, replace with a CSP frame-ancestors directive.
+    X-Frame-Options = "DENY"
+
+    # Referrer-Policy: leak only the origin on cross-origin requests.
+    Referrer-Policy = "strict-origin-when-cross-origin"
+
+    # Permissions-Policy: disable powerful APIs we don't use.
+    Permissions-Policy = "camera=(), microphone=(), geolocation=(), interest-cohort=()"
+
+    # Content-Security-Policy:
+    # - default-src 'self'                 -> only same-origin by default
+    # - script-src: allow inline (Tailwind Play CDN / dynamic PDF.js / XLSX
+    #   loaders) + the two CDNs we actually use + blobs (PDF.js worker)
+    # - style-src: allow inline + tailwind cdn
+    # - img-src: allow data: URLs (we render scan images as data URLs),
+    #   the school logo host, and same-origin
+    # - connect-src: 'self' (Netlify Functions) + https (allow fetches to
+    #   your own domain)
+    # - font-src: data: + https (Tailwind fonts)
+    # - worker-src: blob: (PDF.js worker) + https
+    # - frame-ancestors: 'none' (extra clickjacking protection)
+    # - base-uri: 'self'
+    # - form-action: 'self'
+    # NOTE: When you stop using the Tailwind Play CDN and the dynamic
+    # <script> injection of XLSX/PDF.js (recommended: bundle them via npm),
+    # tighten script-src to: 'self' and remove the cdn entries + 'unsafe-inline'.
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.sheetjs.com https://cdnjs.cloudflare.com; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; img-src 'self' data: https://www.hofung.edu.hk; font-src 'self' data: https:; connect-src 'self' https:; worker-src 'self' blob: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"

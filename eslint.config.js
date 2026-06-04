@@ -24,6 +24,17 @@ export default defineConfig([
     },
     rules: {
       'no-unused-vars': ['error', { varsIgnorePattern: '^[A-Z_]' }],
+      // Allow intentional control-character matching (used for input sanitization)
+      'no-control-regex': 'off',
+    },
+  },
+  {
+    // Netlify Functions run in Node.js, not the browser — give them Node globals.
+    files: ['netlify/**/*.{js,mjs,cjs}'],
+    languageOptions: {
+      globals: {
+        ...globals.node,
+      },
     },
   },
 ])
