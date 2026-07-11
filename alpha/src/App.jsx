@@ -1,5 +1,5 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
-import { Upload, FileSpreadsheet, Plus, Trash2, CheckCircle2, ScanSearch, Settings, ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut, LayoutTemplate, ChevronLeft, Layers, ScanLine, GraduationCap, Hash, UserSquare2, X, Loader2, RotateCw, Menu, GitBranch, Camera, FileText, Signature, Save, BookmarkPlus } from 'lucide-react';
+import { Upload, FileSpreadsheet, Plus, Trash2, CheckCircle2, ScanSearch, Settings, ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut, LayoutTemplate, ChevronLeft, Layers, ScanLine, GraduationCap, Hash, UserSquare2, X, Loader2, RotateCw, Menu, GitBranch, Camera, FileText, Signature, Save, BookmarkPlus, Pencil, Check } from 'lucide-react';
 
 const App = () => {
     // State for multiple pages
@@ -18,6 +18,7 @@ const App = () => {
     const [toast, setToast] = useState(null); // Toast notification state
     const [showIdModal, setShowIdModal] = useState(false);
     const [idModalIdx, setIdModalIdx] = useState(0);
+    const [isEditingIds, setIsEditingIds] = useState(false); // toggle: when true, all ID fields in bottom results panel become dropdowns
 
     // Grading State
     const [answerKeyInput, setAnswerKeyInput] = useState("");
@@ -2295,26 +2296,44 @@ const App = () => {
                 {showResults && currentPage && currentPage.results && (
                     <div className="absolute bottom-0 left-0 right-0 bg-[#010409] border-t border-[#30363d] shadow-xl max-h-[300px] flex flex-col transition-transform z-30">
                         <div className="px-4 py-2 border-b border-[#30363d] flex justify-between items-center bg-[#0d1117]">
-                            <div className="flex items-center gap-2 flex-wrap">
+                            <div className="flex items-center gap-1.5 flex-wrap">
                                 <UserSquare2 className="w-4 h-4 text-[#58a6ff]" />
                                 {getIdFieldsForPage(currentPageIndex).map((field) => {
                                     const val = getIdValueByRegionId(field.regionId);
                                     const isIncomplete = val === '?';
+                                    if (isEditingIds) {
+                                        return (
+                                            <select
+                                                key={field.regionId}
+                                                value={val}
+                                                onChange={(e) => updateIdResult(field.regionId, e.target.value)}
+                                                className={`text-sm font-bold px-1.5 py-0.5 rounded border outline-none cursor-pointer ${isIncomplete ? 'bg-[#da3633]/20 border-[#da3633]/40 text-[#f85149]' : 'bg-[#161b22] border-[#30363d] text-[#e6edf3] hover:border-[#58a6ff]'}`}
+                                                title={field.label}
+                                            >
+                                                <option value="?" disabled>?</option>
+                                                {field.options.map((opt) => (
+                                                    <option key={opt} value={opt}>{opt}</option>
+                                                ))}
+                                            </select>
+                                        );
+                                    }
                                     return (
-                                        <select
+                                        <span
                                             key={field.regionId}
-                                            value={val}
-                                            onChange={(e) => updateIdResult(field.regionId, e.target.value)}
-                                            className={`text-sm font-bold px-1.5 py-0.5 rounded border outline-none cursor-pointer ${isIncomplete ? 'bg-[#da3633]/20 border-[#da3633]/40 text-[#f85149]' : 'bg-[#161b22] border-[#30363d] text-[#e6edf3] hover:border-[#58a6ff]'}`}
+                                            className={`text-lg font-bold leading-none ${isIncomplete ? 'text-[#f85149]' : 'text-[#e6edf3]'}`}
                                             title={field.label}
                                         >
-                                            <option value="?" disabled>?</option>
-                                            {field.options.map((opt) => (
-                                                <option key={opt} value={opt}>{opt}</option>
-                                            ))}
-                                        </select>
+                                            {val}
+                                        </span>
                                     );
                                 })}
+                                <button
+                                    onClick={() => setIsEditingIds(v => !v)}
+                                    className={`ml-1 rounded p-1 transition-colors ${isEditingIds ? 'text-[#3fb950] hover:bg-[#238636]/10' : 'text-[#484f58] hover:text-[#58a6ff] hover:bg-[#1f6feb]/10'}`}
+                                    title={isEditingIds ? 'Done editing' : 'Edit student ID'}
+                                >
+                                    {isEditingIds ? <Check className="w-4 h-4" /> : <Pencil className="w-4 h-4" />}
+                                </button>
                             </div>
                             <button onClick={() => setShowResults(false)} className="text-[#7d8590] hover:text-[#e6edf3] bg-transparent"><ChevronDown /></button>
                         </div>
