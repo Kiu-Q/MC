@@ -1,6 +1,98 @@
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Upload, FileSpreadsheet, Plus, Trash2, CheckCircle2, ScanSearch, Settings, ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut, LayoutTemplate, ChevronLeft, Layers, ScanLine, GraduationCap, Hash, UserSquare2, X, Loader2, RotateCw, Menu, GitBranch, Camera, FileText, Signature, Save, BookmarkPlus, Pencil, Check } from 'lucide-react';
 
+const BLACK_PIXEL_THRESHOLD = 200;
+const LINE_DARK_THRESHOLD = BLACK_PIXEL_THRESHOLD;
+const ANSWER_DARK_THRESHOLD = BLACK_PIXEL_THRESHOLD;
+// Scanned marks can be light after PDF/image rendering. Use these only to
+// reject background noise; the answer decision is driven by relative contrast.
+const ANSWER_MIN_FILL = 0.05;
+const ANSWER_OBVIOUS_GAP = 0.05;
+
+const getLongestDarkRun = (data, rowOffset, rowWidth, threshold = LINE_DARK_THRESHOLD) => {
+    let longestRun = 0;
+    let currentRun = 0;
+    for (let x = 0; x < rowWidth; x++) {
+        const idx = (rowOffset + x) * 4;
+        const value = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
+        if (value < threshold) {
+            currentRun += 1;
+            longestRun = Math.max(longestRun, currentRun);
+        } else {
+            currentRun = 0;
+        }
+    }
+    return longestRun;
+};
+
+const getBestHorizontalLine = (ctx, width, height) => {
+    const searchStartY = Math.floor(height * 0.3);
+    const searchEndY = Math.floor(height * 0.5);
+    const searchStartX = Math.floor(width * 0.2);
+    const searchWidth = Math.floor(width * 0.8);
+    try {
+        const pixels = ctx.getImageData(searchStartX, searchStartY, searchWidth, searchEndY - searchStartY);
+        const minLineLength = Math.floor(searchWidth * 0.35);
+        let best = { y: -1, length: 0 };
+        for (let y = 0; y < searchEndY - searchStartY; y++) {
+            const length = getLongestDarkRun(pixels.data, y * searchWidth, searchWidth);
+            if (length >= minLineLength && length > best.length) {
+                best = { y: searchStartY + y, length };
+            }
+        }
+        return best;
+    } catch (e) {
+        console.warn('Line Y detection failed', e);
+        return { y: -1, length: 0 };
+    }
+};
+
+const classifyAnswerScores = (scores, labels) => {
+    if (!scores.length || scores.every(score => score < ANSWER_MIN_FILL)) {
+        return { label: 'BLANK', selectedIndex: -1, confidence: Math.max(...scores, 0), averages: [] };
+    }
+
+    const averages = scores.map((score, index) => {
+        const others = scores.filter((_, otherIndex) => otherIndex !== index);
+        const average = others.reduce((sum, value) => sum + value, 0) / others.length;
+        return { index, score, average, gap: score - average };
+    });
+    // A filled option has a high own fill ratio while the mean of the other
+    // options stays low. This is the inverse of the old highest-score logic.
+    const candidates = averages.filter(item => item.score >= ANSWER_MIN_FILL && item.gap >= ANSWER_OBVIOUS_GAP);
+
+    if (candidates.length === 1) {
+        const candidate = candidates[0];
+        return {
+            label: labels[candidate.index] || 'BLANK',
+            selectedIndex: candidate.index,
+            confidence: candidate.gap,
+            averages,
+        };
+    }
+
+    return {
+        label: candidates.length > 1 ? 'MULT' : 'BLANK',
+        selectedIndex: -1,
+        confidence: candidates.length > 1 ? Math.max(...candidates.map(candidate => candidate.gap)) : Math.max(...scores, 0),
+        averages,
+    };
+};
+
+const validateTemplate = (template) => {
+    if (!template || typeof template !== 'object') return 'Template must be an object.';
+    if (template.schemaVersion !== 1) return 'Unsupported template version.';
+    if (!Array.isArray(template.idRegions) || !Array.isArray(template.answerRegions)) return 'Template regions are invalid.';
+    const regions = [...template.idRegions, ...template.answerRegions];
+    for (const region of regions) {
+        for (const key of ['xRatio', 'yRatio', 'wRatio', 'hRatio']) {
+            if (!Number.isFinite(region[key]) || region[key] < 0 || region[key] > 1) return `Invalid region ${key}.`;
+        }
+        if (!Number.isInteger(region.rows) || region.rows < 1 || !Number.isInteger(region.cols) || region.cols < 1 || !Array.isArray(region.labels) || region.labels.length < 1) return 'Invalid region rows, columns, or labels.';
+    }
+    return null;
+};
+
 const App = () => {
     // State for multiple pages
     const [file, setFile] = useState(null);
@@ -93,6 +185,7 @@ const App = () => {
     const [editingTemplateId, setEditingTemplateId] = useState(null);
     const [drawLineY, setDrawLineY] = useState(null); // adjustable detected horizontal line Y (image coords)
     const [drawLineX, setDrawLineX] = useState(null); // adjustable detected vertical line X (image coords)
+    const importTemplateInputRef = useRef(null);
     const [isDraggingLineY, setIsDraggingLineY] = useState(false);
     const [isDraggingLineX, setIsDraggingLineX] = useState(false);
     const [useLineY, setUseLineY] = useState(true); // toggle: use horizontal alignment
@@ -247,6 +340,7 @@ const App = () => {
             const newTpl = {
                 id: Date.now().toString(),
                 name: savedName,
+                schemaVersion: 1,
                 createdAt: new Date().toISOString(),
                 idRegions, answerRegions,
                 sourceXOffset: xOffset,
@@ -450,33 +544,8 @@ const App = () => {
     // --- Helper: Line Detection ---
     const detectVerticalOffset = (ctx, width, height) => {
         const EXPECTED_Y_RATIO = 0.227;
-        const searchStartY = Math.floor(height * 0.3);
-        const searchEndY = Math.floor(height * 0.5);
-        const searchStartX = Math.floor(width * 0.2);
-        const searchWidth = Math.floor(width * 0.8);
-        try {
-            const pixels = ctx.getImageData(searchStartX, searchStartY, searchWidth, searchEndY - searchStartY);
-            const data = pixels.data;
-            const searchH = searchEndY - searchStartY;
-            let maxDarkness = 0;
-            let bestY = -1;
-            for (let y = 0; y < searchH; y++) {
-                let darkPixels = 0;
-                for (let x = 0; x < searchWidth; x++) {
-                    const idx = (y * searchWidth + x) * 4;
-                    const val = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-                    if (val < 200) darkPixels++;
-                }
-                if (darkPixels > searchWidth * 0.4) {
-                    if (darkPixels > maxDarkness) { maxDarkness = darkPixels; bestY = y; }
-                }
-            }
-            if (bestY !== -1) {
-                const detectedAbsoluteY = searchStartY + bestY;
-                return detectedAbsoluteY - (height * EXPECTED_Y_RATIO);
-            }
-        } catch (e) { console.warn("Y-alignment failed", e); }
-        return 0;
+        const detectedLine = getBestHorizontalLine(ctx, width, height);
+        return detectedLine.y >= 0 ? detectedLine.y - (height * EXPECTED_Y_RATIO) : 0;
     };
 
     // --- Helper: Get absolute X position of detected vertical line ---
@@ -497,7 +566,7 @@ const App = () => {
                 for (let y = 0; y < searchHeight; y++) {
                     const idx = (y * searchW + x) * 4;
                     const val = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-                    if (val < 200) darkPixels++;
+                    if (val < BLACK_PIXEL_THRESHOLD) darkPixels++;
                 }
                 if (darkPixels > searchHeight * 0.5) {
                     if (darkPixels > maxDarkness) { maxDarkness = darkPixels; bestX = x; }
@@ -512,32 +581,7 @@ const App = () => {
 
     // --- Helper: Get absolute Y position of detected horizontal line ---
     const getDetectedLineY = (ctx, width, height) => {
-        const searchStartY = Math.floor(height * 0.3);
-        const searchEndY = Math.floor(height * 0.5);
-        const searchStartX = Math.floor(width * 0.2);
-        const searchWidth = Math.floor(width * 0.8);
-        try {
-            const pixels = ctx.getImageData(searchStartX, searchStartY, searchWidth, searchEndY - searchStartY);
-            const data = pixels.data;
-            const searchH = searchEndY - searchStartY;
-            let maxDarkness = 0;
-            let bestY = -1;
-            for (let y = 0; y < searchH; y++) {
-                let darkPixels = 0;
-                for (let x = 0; x < searchWidth; x++) {
-                    const idx = (y * searchWidth + x) * 4;
-                    const val = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-                    if (val < 200) darkPixels++;
-                }
-                if (darkPixels > searchWidth * 0.4) {
-                    if (darkPixels > maxDarkness) { maxDarkness = darkPixels; bestY = y; }
-                }
-            }
-            if (bestY !== -1) {
-                return searchStartY + bestY;
-            }
-        } catch (e) { console.warn("Line Y detection failed", e); }
-        return -1;
+        return getBestHorizontalLine(ctx, width, height).y;
     };
 
     const detectHorizontalOffset = (ctx, width, height) => {
@@ -557,7 +601,7 @@ const App = () => {
                 for (let y = 0; y < searchHeight; y++) {
                     const idx = (y * searchW + x) * 4;
                     const val = (data[idx] + data[idx + 1] + data[idx + 2]) / 3;
-                    if (val < 200) darkPixels++;
+                    if (val < BLACK_PIXEL_THRESHOLD) darkPixels++;
                 }
                 if (darkPixels > searchHeight * 0.5) {
                     if (darkPixels > maxDarkness) { maxDarkness = darkPixels; bestX = x; }
@@ -610,7 +654,7 @@ const App = () => {
                 ctx.drawImage(img, 0, 0);
                 const yOffset = detectVerticalOffset(ctx, img.width, img.height);
                 const xOffset = detectHorizontalOffset(ctx, img.width, img.height);
-                resolve({ xOffset, yOffset });
+                resolve({ xOffset, yOffset, lineY: getDetectedLineY(ctx, img.width, img.height) });
             };
             img.onerror = () => resolve({ xOffset: 0, yOffset: 0 });
             img.src = imageUrl;
@@ -801,6 +845,7 @@ const App = () => {
         const newTemplate = {
             id: Date.now().toString(),
             name: newTemplateName.trim(),
+            schemaVersion: 1,
             createdAt: new Date().toISOString(),
             idRegions,
             answerRegions,
@@ -826,14 +871,14 @@ const App = () => {
         for (let i = 0; i < pages.length; i++) {
             setProgress({ current: i + 1, total: pages.length });
             const page = pages[i];
-            const { xOffset, yOffset } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height);
+            const { xOffset, yOffset, lineY } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height);
             // Differential shift: how much this page's content moved vs. the source page
             // Only shift on axes where alignment is enabled
             const dx = tplUseX ? (xOffset - sourceX) : 0;
             const dy = tplUseY ? (yOffset - sourceY) : 0;
             const baseRegions = templateToRegions(template, page.width, page.height, `p${page.id}`);
             const shiftedRegions = baseRegions.map(r => ({ ...r, x: r.x + dx, y: r.y + dy }));
-            updatedPages.push({ ...page, regions: shiftedRegions, results: {} });
+            updatedPages.push({ ...page, detectedLineY: lineY > 0 ? lineY : page.detectedLineY, regions: shiftedRegions, results: {} });
         }
         setPages(updatedPages);
         setIsProcessing(false);
@@ -866,11 +911,11 @@ const App = () => {
                     for (let i = 0; i < pages.length; i++) {
                         setProgress({ current: i + 1, total: pages.length });
                         const page = pages[i];
-                        const { xOffset, yOffset } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height);
+                        const { xOffset, yOffset, lineY } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height);
                         const dx = useX ? (xOffset - sourceX) : 0;
                         const dy = useY ? (yOffset - sourceY) : 0;
                         const baseRegions = templateToRegions(tpl, page.width, page.height, `p${page.id}`);
-                        updatedPages.push({ ...page, regions: baseRegions.map(r => ({ ...r, x: r.x + dx, y: r.y + dy })), results: {} });
+                        updatedPages.push({ ...page, detectedLineY: lineY > 0 ? lineY : page.detectedLineY, regions: baseRegions.map(r => ({ ...r, x: r.x + dx, y: r.y + dy })), results: {} });
                     }
                     setPages(updatedPages);
                     setIsProcessing(false);
@@ -937,6 +982,57 @@ const App = () => {
         setTemplates(prev => prev.filter(t => t.id !== templateId));
         setToast(`Template${tpl ? ` "${tpl.name}"` : ''} deleted.`);
         setTimeout(() => setToast(null), 3000);
+    };
+
+    const exportTemplate = (template) => {
+        const portableTemplate = {
+            schemaVersion: 1,
+            name: template.name,
+            idRegions: template.idRegions || [],
+            answerRegions: template.answerRegions || [],
+            sourceXOffset: template.sourceXOffset || 0,
+            sourceYOffset: template.sourceYOffset || 0,
+            useAlignmentY: template.useAlignmentY !== false,
+            useAlignmentX: template.useAlignmentX !== false,
+        };
+        const blob = new Blob([JSON.stringify(portableTemplate, null, 2)], { type: 'application/json' });
+        const url = URL.createObjectURL(blob);
+        const anchor = document.createElement('a');
+        anchor.href = url;
+        anchor.download = `${template.name.replace(/[^a-z0-9_-]+/gi, '-').replace(/^-|-$/g, '') || 'template'}.json`;
+        anchor.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const importTemplate = async (event) => {
+        const importedFile = event.target.files?.[0];
+        event.target.value = '';
+        if (!importedFile) return;
+        try {
+            const template = JSON.parse(await importedFile.text());
+            const validationError = validateTemplate(template);
+            if (validationError) throw new Error(validationError);
+            const baseName = String(template.name || 'Imported template').trim() || 'Imported template';
+            const existingNames = new Set(templates.map(item => item.name));
+            let name = baseName;
+            let suffix = 2;
+            while (existingNames.has(name)) name = `${baseName} (${suffix++})`;
+            const importedTemplate = {
+                ...template,
+                id: `imported-${Date.now()}`,
+                name,
+                createdAt: new Date().toISOString(),
+                isBuiltIn: false,
+            };
+            setTemplates(prev => [...prev, importedTemplate]);
+            setLastAppliedTemplateId(importedTemplate.id);
+            if (pages.length > 0) await applyTemplate(importedTemplate);
+            setToast(`Template "${name}" imported.`);
+            setTimeout(() => setToast(null), 3000);
+        } catch (error) {
+            setToast(`Template import failed: ${error.message}`);
+            setTimeout(() => setToast(null), 4000);
+        }
     };
 
     // --- Canvas Drawing ---
@@ -1358,7 +1454,7 @@ const App = () => {
                                     for (let px = cx + paddingX; px < cx + cw - paddingX; px++) {
                                         if (px < canvas.width && py < canvas.height) {
                                             const val = grayData[Math.floor(py) * canvas.width + Math.floor(px)];
-                                            if (val < 220) darkPixelCount++;
+                                            if (val < BLACK_PIXEL_THRESHOLD) darkPixelCount++;
                                             totalPixelCount++;
                                         }
                                     }
@@ -1371,7 +1467,7 @@ const App = () => {
                             rowScores.sort((a, b) => b.fillRatio - a.fillRatio);
 
                             // NEW LOGIC: Candidate System for ID
-                            const MIN_ID_THRESHOLD = 0.45; // Lowered to 5% to catch very light marks
+                            const MIN_ID_THRESHOLD = 0.08; // Accept light ID marks; ambiguity is handled by the gap check below.
                             const candidates = rowScores.filter(s => s.fillRatio >= MIN_ID_THRESHOLD);
 
                             let label = 'BLANK';
@@ -1403,7 +1499,6 @@ const App = () => {
                             regionResults.push({ qNum: bestRow, rowIndex: bestRow, detectedIndex: 0, label: label, confidence: maxFill });
                             pageResults[region.id] = regionResults;
                         } else {
-                            // ... (Answer scanning logic remains unchanged as requested)
                             const regionResults = [];
                             let validQuestionCount = 0;
                             rowLayouts.forEach((rowConfig, rowIndex) => {
@@ -1422,7 +1517,7 @@ const App = () => {
                                         for (let px = cx + paddingX; px < cx + cw - paddingX; px++) {
                                             if (px < canvas.width && py < canvas.height) {
                                                 const val = grayData[Math.floor(py) * canvas.width + Math.floor(px)];
-                                                if (val < 220) darkPixelCount++;
+                                                if (val < ANSWER_DARK_THRESHOLD) darkPixelCount++;
                                                 totalPixelCount++;
                                             }
                                         }
@@ -1430,26 +1525,12 @@ const App = () => {
                                     const fillRatio = totalPixelCount > 0 ? darkPixelCount / totalPixelCount : 0;
                                     colScores.push({ index: c, fillRatio: fillRatio });
                                 }
-                                colScores.sort((a, b) => b.fillRatio - a.fillRatio);
-                                const maxFill = colScores[0].fillRatio;
-                                const minFill = colScores[colScores.length - 1].fillRatio;
-                                const secondMaxFill = colScores.length > 1 ? colScores[1].fillRatio : 0;
-                                let label = '';
-                                let selectedIndex = -1;
-
-                                // Robust Answer Logic — tuned for custom templates
-                                if ((maxFill - minFill) < 0.08 || maxFill < 0.35) {
-                                    label = 'BLANK';
-                                }
-                                else if ((maxFill - secondMaxFill) < 0.10) {
-                                    label = 'MULT';
-                                }
-                                else {
-                                    selectedIndex = colScores[0].index;
-                                    label = region.labels[selectedIndex];
-                                }
-
-                                regionResults.push({ qNum: region.startQ + validQuestionCount, rowIndex: rowIndex, detectedIndex: selectedIndex, label: label, confidence: maxFill });
+                                const scoreByIndex = Array.from({ length: region.labels.length }, (_, index) => {
+                                    const score = colScores.find(item => item.index === index);
+                                    return score ? score.fillRatio : 0;
+                                });
+                                const classification = classifyAnswerScores(scoreByIndex, region.labels);
+                                regionResults.push({ qNum: region.startQ + validQuestionCount, rowIndex: rowIndex, detectedIndex: classification.selectedIndex, label: classification.label, confidence: classification.confidence, averages: classification.averages });
                                 validQuestionCount++;
                             });
                             pageResults[region.id] = regionResults;
@@ -1561,14 +1642,10 @@ const App = () => {
         const rowNum_Marks = endRow + 3;
         const rowNum_Key = endRow + 6;
 
-        let totalFullMark = 0;
-
         for (let q = 1; q <= maxQ; q++) {
             const colLetter = getExcelCol(q);
             const range = `${colLetter}${startRow}:${colLetter}${endRow}`;
             const qMark = getQuestionMark(q);
-            totalFullMark += qMark;
-
             footerRows[IDX_MARKS].push(qMark);
 
             const key = parsedAnswerKey[q] || "-";
@@ -1809,6 +1886,24 @@ const App = () => {
                     >
                         <Plus className="w-3 h-3" /> Add New Template
                     </button>
+                    <div className="grid grid-cols-2 gap-1">
+                        <button
+                            onClick={() => currentPage && exportTemplate(allTemplates.find(t => t.id === lastAppliedTemplateId) || getDefaultTemplate())}
+                            disabled={!currentPage}
+                            className="py-1.5 text-xs font-medium text-[#58a6ff] bg-[#1f6feb]/10 rounded border border-[#1f6feb]/30 hover:bg-[#1f6feb]/20 disabled:opacity-40 disabled:cursor-not-allowed flex justify-center items-center gap-1"
+                            title="Export the active template as JSON"
+                        >
+                            <Download className="w-3 h-3" /> Export JSON
+                        </button>
+                        <button
+                            onClick={() => importTemplateInputRef.current?.click()}
+                            className="py-1.5 text-xs font-medium text-[#c9d1d9] bg-[#21262d] rounded border border-[#30363d] hover:bg-[#30363d] flex justify-center items-center gap-1"
+                            title="Import a template JSON file"
+                        >
+                            <Upload className="w-3 h-3" /> Import JSON
+                        </button>
+                        <input ref={importTemplateInputRef} type="file" accept="application/json,.json" onChange={importTemplate} className="hidden" />
+                    </div>
                 </div>
             )}
         </div>
@@ -1875,20 +1970,21 @@ const App = () => {
 
     // --- Manual Answer Editing ---
     const cycleAnswer = (regionId, resultIndex) => {
-        const cycleOrder = ['A', 'B', 'C', 'D', 'MULT', 'BLANK'];
         setPages(prevPages => prevPages.map((p, idx) => {
             if (idx === currentPageIndex) {
                 const newResults = { ...p.results };
                 const regionResults = [...newResults[regionId]];
                 const current = regionResults[resultIndex];
+                const region = p.regions.find(item => item.id === regionId);
+                const cycleOrder = [...(region?.labels || ['A', 'B', 'C', 'D']), 'MULT', 'BLANK'];
                 const currentLabel = current.label;
                 const currentCycleIdx = cycleOrder.indexOf(currentLabel);
                 const nextIdx = (currentCycleIdx + 1) % cycleOrder.length;
                 const nextLabel = cycleOrder[nextIdx];
 
                 let newDetectedIndex = current.detectedIndex;
-                if (['A', 'B', 'C', 'D'].includes(nextLabel)) {
-                    newDetectedIndex = ['A', 'B', 'C', 'D'].indexOf(nextLabel);
+                if (region?.labels?.includes(nextLabel)) {
+                    newDetectedIndex = region.labels.indexOf(nextLabel);
                 } else {
                     newDetectedIndex = -1;
                 }
