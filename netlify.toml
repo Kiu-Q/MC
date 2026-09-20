@@ -36,8 +36,8 @@ framework = "vite"
     # - style-src: allow inline + tailwind cdn
     # - img-src: allow data: URLs (we render scan images as data URLs),
     #   the school logo host, and same-origin
-    # - connect-src: 'self' (Netlify Functions) + https (allow fetches to
-    #   your own domain)
+    # - connect-src: 'self' (Netlify Functions) + https + data: (Tesseract
+    #   WASM data URI)
     # - font-src: data: + https (Tailwind fonts)
     # - worker-src: blob: (PDF.js worker) + https
     # - frame-ancestors: 'none' (extra clickjacking protection)
@@ -46,4 +46,4 @@ framework = "vite"
     # NOTE: When you stop using the Tailwind Play CDN and the dynamic
     # <script> injection of XLSX/PDF.js (recommended: bundle them via npm),
     # tighten script-src to: 'self' and remove the cdn entries + 'unsafe-inline'.
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://cdn.sheetjs.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; img-src 'self' data: https://www.hofung.edu.hk; font-src 'self' data: https:; connect-src 'self' https:; worker-src 'self' blob: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://cdn.sheetjs.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; img-src 'self' data: https://www.hofung.edu.hk; font-src 'self' data: https:; connect-src 'self' https: data:; worker-src 'self' blob: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
