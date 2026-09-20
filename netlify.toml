@@ -31,8 +31,8 @@ framework = "vite"
 
     # Content-Security-Policy:
     # - default-src 'self'                 -> only same-origin by default
-    # - script-src: allow inline (Tailwind Play CDN / dynamic PDF.js / XLSX
-    #   loaders) + the required CDNs + blobs (PDF.js worker)
+    # - script-src: allow inline/eval (Tailwind Play CDN / Tesseract WASM /
+    #   dynamic PDF.js / XLSX loaders) + the required CDNs + blobs
     # - style-src: allow inline + tailwind cdn
     # - img-src: allow data: URLs (we render scan images as data URLs),
     #   the school logo host, and same-origin
@@ -46,4 +46,4 @@ framework = "vite"
     # NOTE: When you stop using the Tailwind Play CDN and the dynamic
     # <script> injection of XLSX/PDF.js (recommended: bundle them via npm),
     # tighten script-src to: 'self' and remove the cdn entries + 'unsafe-inline'.
-    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdn.sheetjs.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; img-src 'self' data: https://www.hofung.edu.hk; font-src 'self' data: https:; connect-src 'self' https:; worker-src 'self' blob: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
+    Content-Security-Policy = "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https://cdn.tailwindcss.com https://cdn.sheetjs.com https://cdnjs.cloudflare.com https://cdn.jsdelivr.net; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com; img-src 'self' data: https://www.hofung.edu.hk; font-src 'self' data: https:; connect-src 'self' https:; worker-src 'self' blob: https:; frame-ancestors 'none'; base-uri 'self'; form-action 'self'"
