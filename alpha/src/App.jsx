@@ -1,3 +1,4 @@
+import { detectSheet, readDetectedRegions } from './omr.mjs';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Upload, FileSpreadsheet, Plus, Trash2, CheckCircle2, ScanSearch, Settings, ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut, LayoutTemplate, ChevronLeft, Layers, ScanLine, GraduationCap, Hash, UserSquare2, X, Loader2, RotateCw, Menu, GitBranch, Camera, FileText, Signature, Save, BookmarkPlus, Pencil, Check } from 'lucide-react';
 
@@ -654,7 +655,7 @@ const App = () => {
                 ctx.drawImage(img, 0, 0);
                 const yOffset = detectVerticalOffset(ctx, img.width, img.height);
                 const xOffset = detectHorizontalOffset(ctx, img.width, img.height);
-                resolve({ xOffset, yOffset, lineY: getDetectedLineY(ctx, img.width, img.height) });
+                resolve({ xOffset, yOffset, lineY: getDetectedLineY(ctx, img.width, img.height), sheet: detectSheet(ctx.getImageData(0, 0, img.width, img.height).data, img.width, img.height) });
             };
             img.onerror = () => resolve({ xOffset: 0, yOffset: 0 });
             img.src = imageUrl;
@@ -764,7 +765,7 @@ const App = () => {
                     detectedLineY: detectedLineY > 0 ? detectedLineY : null,
                     detectedLineX: detectedLineX > 0 ? detectedLineX : null,
                     results: {},
-                    regions: getStandardRegions(img.width, img.height, 'p0', xOffset, yOffset)
+                    regions: detectSheet(ctx.getImageData(0, 0, img.width, img.height).data, img.width, img.height, 'p0')?.regions || getStandardRegions(img.width, img.height, 'p0', xOffset, yOffset)
                 }]);
                 if (containerRef.current) {
                     const initialScale = Math.min(1, containerRef.current.clientWidth / img.width);
@@ -816,7 +817,7 @@ const App = () => {
                     detectedLineY: detectedLineY > 0 ? detectedLineY : null,
                     detectedLineX: detectedLineX > 0 ? detectedLineX : null,
                     results: {},
-                    regions: getStandardRegions(canvas.width, canvas.height, `p${i - 1}`, xOffset, yOffset)
+                    regions: detectSheet(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, `p${i - 1}`)?.regions || getStandardRegions(canvas.width, canvas.height, `p${i - 1}`, xOffset, yOffset)
                 });
             }
             setPages(loadedPages);
@@ -871,14 +872,14 @@ const App = () => {
         for (let i = 0; i < pages.length; i++) {
             setProgress({ current: i + 1, total: pages.length });
             const page = pages[i];
-            const { xOffset, yOffset, lineY } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height);
+            const { xOffset, yOffset, lineY, sheet } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height);
             // Differential shift: how much this page's content moved vs. the source page
             // Only shift on axes where alignment is enabled
             const dx = tplUseX ? (xOffset - sourceX) : 0;
             const dy = tplUseY ? (yOffset - sourceY) : 0;
             const baseRegions = templateToRegions(template, page.width, page.height, `p${page.id}`);
             const shiftedRegions = baseRegions.map(r => ({ ...r, x: r.x + dx, y: r.y + dy }));
-            updatedPages.push({ ...page, detectedLineY: lineY > 0 ? lineY : page.detectedLineY, regions: shiftedRegions, results: {} });
+            updatedPages.push({ ...page, detectedLineY: lineY > 0 ? lineY : page.detectedLineY, regions: template.id === DEFAULT_TEMPLATE_ID && sheet ? sheet.regions.map(r => ({...r,id:r.id.replace('p0_', `p${page.id}_`)})) : shiftedRegions, results: {} });
         }
         setPages(updatedPages);
         setIsProcessing(false);
@@ -911,11 +912,11 @@ const App = () => {
                     for (let i = 0; i < pages.length; i++) {
                         setProgress({ current: i + 1, total: pages.length });
                         const page = pages[i];
-                        const { xOffset, yOffset, lineY } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height);
+                        const { xOffset, yOffset, lineY, sheet } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height);
                         const dx = useX ? (xOffset - sourceX) : 0;
                         const dy = useY ? (yOffset - sourceY) : 0;
                         const baseRegions = templateToRegions(tpl, page.width, page.height, `p${page.id}`);
-                        updatedPages.push({ ...page, detectedLineY: lineY > 0 ? lineY : page.detectedLineY, regions: baseRegions.map(r => ({ ...r, x: r.x + dx, y: r.y + dy })), results: {} });
+                        updatedPages.push({ ...page, detectedLineY: lineY > 0 ? lineY : page.detectedLineY, regions: tpl.id === DEFAULT_TEMPLATE_ID && sheet ? sheet.regions.map(r => ({...r,id:r.id.replace('p0_', `p${page.id}_`)})) : baseRegions.map(r => ({ ...r, x: r.x + dx, y: r.y + dy })), results: {} });
                     }
                     setPages(updatedPages);
                     setIsProcessing(false);
@@ -1356,7 +1357,8 @@ const App = () => {
                 if (idx === currentPageIndex) {
                     const updatedRegions = p.regions.map(r => {
                         if (r.id === selectedRegionId) {
-                            return { ...r, x: activeRegionStart.x + dx, y: activeRegionStart.y + dy };
+                            const x = activeRegionStart.x + dx, y = activeRegionStart.y + dy;
+                            return { ...r, x, y, bubbles: r.bubbles?.map(g => g.map(b => ({...b, x:b.x+x-r.x, y:b.y+y-r.y, cx:b.cx+x-r.x, cy:b.cy+y-r.y}))) };
                         }
                         return r;
                     });
@@ -1429,6 +1431,9 @@ const App = () => {
                         const g = pixels.data[i + 1];
                         const b = pixels.data[i + 2];
                         grayData[i / 4] = 0.299 * r + 0.587 * g + 0.114 * b;
+                    }
+                    if (pageObj.regions?.length && pageObj.regions.every(r => r.bubbles)) {
+                        resolve(readDetectedRegions(pixels.data, canvas.width, canvas.height, pageObj.regions)); return;
                     }
                     const pageResults = {};
                     const pageRegions = pageObj.regions || [];
