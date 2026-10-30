@@ -1,4 +1,4 @@
-import { detectSheet, readDetectedRegions } from './omr.mjs';
+import { detectSheet, readDetectedRegions, learnDocumentLayout, hasIncompleteId, ID_FIELDS } from './omr.mjs';
 import React, { useState, useRef, useEffect, useMemo } from 'react';
 import { Upload, FileSpreadsheet, Plus, Trash2, CheckCircle2, ScanSearch, Settings, ChevronRight, ChevronDown, ChevronUp, Download, ZoomIn, ZoomOut, LayoutTemplate, ChevronLeft, Layers, ScanLine, GraduationCap, Hash, UserSquare2, X, Loader2, RotateCw, Menu, GitBranch, Camera, FileText, Signature, Save, BookmarkPlus, Pencil, Check } from 'lucide-react';
 
@@ -312,7 +312,7 @@ const App = () => {
         let xOffset = 0;
         let yOffset = 0;
         if (currentPage) {
-            const auto = await detectOffsetsFromImage(currentPage.imageUrl, currentPage.width, currentPage.height);
+            const auto = await detectOffsetsFromImage(currentPage.imageUrl, currentPage.width, currentPage.height, currentPage.documentLayout);
             // Y axis: use adjusted line if toggle is on
             if (useLineY && drawLineY != null) {
                 yOffset = drawLineY - (currentPage.height * 0.227);
@@ -403,7 +403,9 @@ const App = () => {
         const idRegions = (page.regions || []).filter(r => r.type === 'id');
         if (idRegions.length === 0) return `Page ${index + 1}`;
 
-        const values = idRegions.map(r => getVal(r.id));
+        const values = idRegions.some(r=>ID_FIELDS.some(f=>r.id.endsWith(`_id_${f.suffix}`)))
+            ? ID_FIELDS.map(f=>getVal(idRegions.find(r=>r.id.endsWith(`_id_${f.suffix}`))?.id))
+            : idRegions.map(r => getVal(r.id));
         if (values.every(v => v === '?')) return `Page ${index + 1}`;
 
         return values.join('');
@@ -644,7 +646,7 @@ const App = () => {
     };
 
     // --- Offset Detection from Image URL (async helper) ---
-    const detectOffsetsFromImage = (imageUrl) => {
+    const detectOffsetsFromImage = (imageUrl, _width, _height, documentLayout = null) => {
         return new Promise((resolve) => {
             const img = new Image();
             img.onload = () => {
@@ -655,7 +657,7 @@ const App = () => {
                 ctx.drawImage(img, 0, 0);
                 const yOffset = detectVerticalOffset(ctx, img.width, img.height);
                 const xOffset = detectHorizontalOffset(ctx, img.width, img.height);
-                resolve({ xOffset, yOffset, lineY: getDetectedLineY(ctx, img.width, img.height), sheet: detectSheet(ctx.getImageData(0, 0, img.width, img.height).data, img.width, img.height) });
+                resolve({ xOffset, yOffset, lineY: getDetectedLineY(ctx, img.width, img.height), sheet: detectSheet(ctx.getImageData(0, 0, img.width, img.height).data, img.width, img.height, 'p0', documentLayout) });
             };
             img.onerror = () => resolve({ xOffset: 0, yOffset: 0 });
             img.src = imageUrl;
@@ -820,6 +822,17 @@ const App = () => {
                     regions: detectSheet(context.getImageData(0, 0, canvas.width, canvas.height).data, canvas.width, canvas.height, `p${i - 1}`)?.regions || getStandardRegions(canvas.width, canvas.height, `p${i - 1}`, xOffset, yOffset)
                 });
             }
+            // Learn the common printed layout across this PDF, then re-register
+            // each page independently before reading that pupil's marks.
+            const documentLayout = learnDocumentLayout(loadedPages);
+            if (documentLayout) {
+                for (let i = 0; i < loadedPages.length; i++) {
+                    setProgress({current:i + 1,total:loadedPages.length});
+                    const page = loadedPages[i];
+                    const {sheet} = await detectOffsetsFromImage(page.imageUrl,page.width,page.height,documentLayout);
+                    if (sheet) loadedPages[i] = {...page,documentLayout,regions:sheet.regions.map(r=>({...r,id:r.id.replace('p0_',`p${page.id}_`)}))};
+                }
+            }
             setPages(loadedPages);
             if (loadedPages.length > 0) {
                 if (containerRef.current) {
@@ -842,7 +855,7 @@ const App = () => {
             currentPage.regions, currentPage.width, currentPage.height
         );
         // Capture source page offsets so we can re-align when applying to other pages
-        const { xOffset, yOffset } = await detectOffsetsFromImage(currentPage.imageUrl, currentPage.width, currentPage.height);
+        const { xOffset, yOffset } = await detectOffsetsFromImage(currentPage.imageUrl, currentPage.width, currentPage.height, currentPage.documentLayout);
         const newTemplate = {
             id: Date.now().toString(),
             name: newTemplateName.trim(),
@@ -872,7 +885,7 @@ const App = () => {
         for (let i = 0; i < pages.length; i++) {
             setProgress({ current: i + 1, total: pages.length });
             const page = pages[i];
-            const { xOffset, yOffset, lineY, sheet } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height);
+            const { xOffset, yOffset, lineY, sheet } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height, page.documentLayout);
             // Differential shift: how much this page's content moved vs. the source page
             // Only shift on axes where alignment is enabled
             const dx = tplUseX ? (xOffset - sourceX) : 0;
@@ -912,7 +925,7 @@ const App = () => {
                     for (let i = 0; i < pages.length; i++) {
                         setProgress({ current: i + 1, total: pages.length });
                         const page = pages[i];
-                        const { xOffset, yOffset, lineY, sheet } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height);
+                        const { xOffset, yOffset, lineY, sheet } = await detectOffsetsFromImage(page.imageUrl, page.width, page.height, page.documentLayout);
                         const dx = useX ? (xOffset - sourceX) : 0;
                         const dy = useY ? (yOffset - sourceY) : 0;
                         const baseRegions = templateToRegions(tpl, page.width, page.height, `p${page.id}`);
@@ -1576,8 +1589,7 @@ const App = () => {
         // Auto-jump to first page with incomplete student ID
         const incompleteIndices = [];
         newPages.forEach((page, index) => {
-            const name = getPageName(page, index);
-            if (name.startsWith('Page ')) {
+            if (hasIncompleteId(page.regions || [], page.results)) {
                 incompleteIndices.push(index);
             }
         });
@@ -1947,15 +1959,7 @@ const App = () => {
         const result = [];
         pages.forEach((page, index) => {
             if (!page.results) { result.push(index); return; }
-            const idRegions = (page.regions || []).filter(r => r.type === 'id');
-            if (idRegions.length === 0) { result.push(index); return; }
-            const hasIncomplete = idRegions.some(r => {
-                const res = page.results[r.id];
-                if (!res || res.length === 0) return true;
-                const label = res[0].label;
-                return !label || label === '?' || label === 'BLANK' || label === 'MULT';
-            });
-            if (hasIncomplete) result.push(index);
+            if (hasIncompleteId(page.regions || [], page.results)) result.push(index);
         });
         return result;
     };

@@ -1,6 +1,7 @@
 import { spawnSync } from 'node:child_process';
 import fs from 'node:fs';
 import { detectSheet, readDetectedRegions } from '../src/omr.mjs';
+const reviewed = JSON.parse(fs.readFileSync(new URL('./reviewed-cases.json', import.meta.url), 'utf8'));
 const expected = ['DAAD DDBCDBBCCBBACABD'.replaceAll(' ', ''), '_BADB', 'CADBACBBAC', 'DABDACDBBBDBADACABBD', 'BDCAC CDBB_'.replaceAll(' ', ''), 'DDCACADADBBACAB DABCC'.replaceAll(' ', '')];
 const inputDir = process.argv[2] || '/Users/kiuq/Downloads';
 const files = fs.readdirSync(inputDir).filter(f => f.endsWith('.pdf') && f.includes('Mathematics')).sort();
@@ -39,6 +40,10 @@ for (let fi = 0; fi < files.length; fi++) {
       page,
       count: answers.length
     });
+    for (const c of reviewed.filter(c => c.file === file && c.page === page)) {
+      const actual = answers.find(r => r.qNum === c.q)?.label;
+      if (actual !== c.label) failures.push({page, q: c.q, actual, expected:c.label});
+    }
     if (page === 1) {
       const actual = answers.map(r => r.label === 'BLANK' ? '_' : r.label).join('');
       const exp = expected[fi].padEnd(75, '_');
